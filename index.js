@@ -1,4 +1,3 @@
-// server.js - ИСПРАВЛЕННЫЙ БЭКЕНД
 import express from 'express';
 import mongoose from 'mongoose';
 import cors from 'cors';
@@ -10,13 +9,20 @@ const PORT = process.env.PORT || 8888;
 
 // Middleware
 app.use(cors());
-app.use(express.json());
+app.use(express.json({ limit: '50mb' }));
+app.use(express.urlencoded({ extended: true, limit: '50mb' }));
 
 // MongoDB connection
 const MONGODB_URI = "mongodb://learnlng_db_user:eatapple88@ac-5b9zkip-shard-00-00.spftlfo.mongodb.net:27017,ac-5b9zkip-shard-00-01.spftlfo.mongodb.net:27017,ac-5b9zkip-shard-00-02.spftlfo.mongodb.net:27017/?ssl=true&replicaSet=atlas-kb1waw-shard-0&authSource=admin&retryWrites=true&w=majority&appName=Cluster0";
 mongoose.connect(MONGODB_URI)
   .then(() => console.log('Connected to MongoDB'))
   .catch(err => console.error('MongoDB connection error:', err));
+const adjectivesTableSchema = new mongoose.Schema({
+  data: { type: Array, required: true },
+  name: { type: String, default: 'adjectives' }
+}, { timestamps: true });
+
+// МОДЕЛЬ ДЛЯ ТАБЛИЦЫ ПРИЛАГАТЕЛЬНЫХ
 
 // Mongoose Schemas
 const wordSchema = new mongoose.Schema({
@@ -96,6 +102,7 @@ const tableSchema = new mongoose.Schema({
 }, { timestamps: true });
 
 // Mongoose Models
+const AdjectivesTable = mongoose.model('AdjectivesTable', adjectivesTableSchema);
 const Word = mongoose.model('Word', wordSchema);
 const Image = mongoose.model('Image', imageSchema);
 // ИСПРАВЛЕНО: переименовал Number в NumberValue
@@ -106,7 +113,91 @@ const TestResult = mongoose.model('TestResult', testResultSchema);
 const Flag = mongoose.model('Flag', flagSchema);
 const Settings = mongoose.model('Settings', settingsSchema);
 const Table = mongoose.model('Table', tableSchema);
+const lessonTypeSchema = new mongoose.Schema({
+  typeId: { type: Number, required: true, unique: true },
+  name: { type: String, required: true },
+  description: { type: String },
+  config: { type: Object } // Конфигурация для типа урока
+}, { timestamps: true });
 
+
+// Новая схема для модулей уроков
+
+// Новая схема для предложений (лексика предложение)
+const sentenceSchema = new mongoose.Schema({
+  moduleId: { type: mongoose.Schema.Types.ObjectId, ref: 'LessonModule', required: true },
+  sentenceStructure: [{
+    word: String,
+    wordData: {
+      imageBase: String,
+      imagePng: String,
+      translations: Map
+    },
+    database: String,
+    lesson: String,
+    number: String,
+    gender: String,
+    _id: false
+  }],
+  image: { type: String },
+  order: { type: Number, default: 0 }
+}, { timestamps: true });
+
+
+const sentenceModuleConfigSchema = new mongoose.Schema({
+  columnsCount: { type: Number, default: 2 },
+  columnConfigs: [{
+    database: { type: String, required: true },
+    filters: {
+      number: String,
+      gender: String
+    }
+  }]
+}, { _id: false });
+
+const lessonModuleSchema = new mongoose.Schema({
+  lessonId: { type: mongoose.Schema.Types.ObjectId, ref: 'Lesson', required: true },
+  typeId: { type: Number, required: true },
+  order: { type: Number, required: true },
+  title: { type: String },
+  config: { type: sentenceModuleConfigSchema },
+  content: { type: Array },
+  isActive: { type: Boolean, default: true }
+}, { timestamps: true });
+const LessonModule = mongoose.model('LessonModule',lessonModuleSchema);
+
+const LessonType = mongoose.model('LessonType', lessonTypeSchema);
+
+const Sentence = mongoose.model('Sentence', sentenceSchema);
+
+// Инициализация типов уроков
+async function initializeLessonTypes() {
+  const typesCount = await LessonType.countDocuments();
+  if (typesCount === 0) {
+    await LessonType.insertMany([
+      {
+        typeId: 1,
+        name: 'лексика слова',
+        description: 'Урок с отдельными словами и картинками'
+      },
+      {
+        typeId: 2,
+        name: 'тест лексика слова',
+        description: 'Тест на знание слов'
+      },
+      {
+        typeId: 3,
+        name: 'лексика предложение',
+        description: 'Урок с составлением предложений',
+        config: {
+          maxColumns: 20,
+          availableDatabases: ['nouns', 'adjectives', 'verbs', 'pronouns', 'numerals', 'adverbs', 'prepositions']
+        }
+      }
+    ]);
+    console.log('Lesson types initialized');
+  }
+}
 // Initialize default data
 async function initializeDefaultData() {
   try {
@@ -132,14 +223,24 @@ async function initializeDefaultData() {
       console.log('Default settings created');
     }
 
-    // Check if table exists, if not create empty table
+    // Check if main table exists, if not create empty table
     const tableCount = await Table.countDocuments();
     if (tableCount === 0) {
       await Table.create({
         data: [],
         name: 'main'
       });
-      console.log('Default table created');
+      console.log('Default main table created');
+    }
+
+    // Check if adjectives table exists, if not create empty table
+    const adjectivesTableCount = await AdjectivesTable.countDocuments();
+    if (adjectivesTableCount === 0) {
+      await AdjectivesTable.create({
+        data: [],
+        name: 'adjectives'
+      });
+      console.log('Default adjectives table created');
     }
 
     // Check if words exist, if not create sample words
@@ -159,35 +260,230 @@ async function initializeDefaultData() {
             english: 'A banana',
             turkish: 'Muz'
           }
-        },
-        {
-          translations: {
-            russian: 'СТОЛ',
-            english: 'A table',
-            turkish: 'Masa'
-          }
-        },
-        {
-          translations: {
-            russian: 'СТУЛ',
-            english: 'A chair',
-            turkish: 'Sandalye'
-          }
         }
       ]);
       console.log('Sample words created');
+        await initializeLessonTypes();
+    }
+     const typesCount = await LessonType.countDocuments();
+    if (typesCount === 0) {
+      await LessonType.insertMany([
+        {
+          typeId: 1,
+          name: 'лексика слова',
+          description: 'Урок с отдельными словами и картинками'
+        },
+        {
+          typeId: 2, 
+          name: 'тест лексика слова',
+          description: 'Тест на знание слов'
+        },
+        {
+          typeId: 3,
+          name: 'лексика предложение',
+          description: 'Урок с составлением предложений',
+          config: {
+            maxColumns: 20,
+            availableDatabases: ['nouns', 'adjectives', 'verbs', 'pronouns', 'numerals', 'adverbs', 'prepositions']
+          }
+        }
+      ]);
+      console.log('Lesson types initialized');
     }
   } catch (error) {
     console.error('Error initializing default data:', error);
   }
 }
-
+app.get('/api/debug/sentences', async (req, res) => {
+  try {
+    const sentences = await Sentence.find().populate('moduleId');
+    console.log('All sentences in DB:', JSON.stringify(sentences, null, 2));
+    res.json(sentences);
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+app.get('/api/debug/module/:id', async (req, res) => {
+  try {
+    const module = await LessonModule.findById(req.params.id);
+    if (!module) {
+      return res.status(404).json({ error: 'Module not found' });
+    }
+    
+    res.json({
+      module: {
+        id: module._id,
+        title: module.title,
+        typeId: module.typeId,
+        config: module.config,
+        columnConfigs: module.config?.columnConfigs,
+        configExists: !!module.config,
+        columnConfigsExist: !!module.config?.columnConfigs,
+        columnConfigsCount: module.config?.columnConfigs?.length || 0
+      }
+    });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
 // Routes
+app.get('/api/adjectives-table', async (req, res) => {
+    try {
+        const table = await AdjectivesTable.findOne({ name: 'adjectives' });
+        // Всегда возвращаем массив, даже если таблица не найдена
+        res.json(Array.isArray(table?.data) ? table.data : []);
+    } catch (error) {
+        console.error('Error fetching adjectives table:', error);
+        res.json([]); // Всегда возвращаем массив при ошибке
+    }
+});
+
+// Save adjectives table data
+app.post('/api/adjectives-table', async (req, res) => {
+  try {
+    const { tableData } = req.body;
+    
+    await AdjectivesTable.findOneAndUpdate(
+      { name: 'adjectives' },
+      { data: tableData },
+      { upsert: true, new: true }
+    );
+
+    res.json({ message: 'Adjectives table data saved successfully' });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+
+app.post('/api/adjectives-table/sync-themes', async (req, res) => {
+  try {
+    const nounsTable = await Table.findOne({ name: 'main' });
+    let adjectivesTable = await AdjectivesTable.findOne({ name: 'adjectives' });
+    
+    if (!nounsTable || !nounsTable.data) {
+      return res.status(400).json({ error: 'Nouns table not found' });
+    }
+
+    // Если таблицы прилагательных нет, создаем пустую
+    if (!adjectivesTable) {
+      adjectivesTable = await AdjectivesTable.create({
+        data: [],
+        name: 'adjectives'
+      });
+    }
+
+    // Получаем все темы из таблицы существительных
+    const nounThemes = new Set();
+    nounsTable.data.forEach(row => {
+      if (row['Урок название'] && row['Урок название'].trim() !== '') {
+        nounThemes.add(row['Урок название']);
+      }
+    });
+
+    // Получаем существующие темы из таблицы прилагательных
+    const existingAdjectiveThemes = new Set();
+    if (adjectivesTable.data && adjectivesTable.data.length > 0) {
+      adjectivesTable.data.forEach(row => {
+        if (row['Урок название'] && row['Урок название'].trim() !== '') {
+          existingAdjectiveThemes.add(row['Урок название']);
+        }
+      });
+    }
+
+    // Находим темы, которых нет в таблице прилагательных
+    const themesToAdd = Array.from(nounThemes).filter(theme => !existingAdjectiveThemes.has(theme));
+    
+    let updatedAdjectivesData = adjectivesTable.data || [];
+    let addedCount = 0;
+
+    // Получаем структуру колонок из существующей таблицы прилагательных
+    let existingColumns = [];
+    if (updatedAdjectivesData.length > 0) {
+      existingColumns = Object.keys(updatedAdjectivesData[0]);
+    } else {
+      // Если таблица пустая, создаем базовую структуру
+      existingColumns = [
+        'Уровень изучения номер',
+        'Урок номер', 
+        'Урок название',
+        'База изображение',
+        'Картинка png',
+        // Базовые колонки для языков
+        'База прилагательные номер Русский',
+        'База прилагательные слова Русский',
+        'База прилагательные мужской род Русский',
+        'База прилагательные женский род Русский',
+        'База прилагательные средний род Русский',
+        'База прилагательные множественное число Русский',
+        'База прилагательные номер Английский',
+        'База прилагательные слова Английский',
+        'База прилагательные мужской род Английский',
+        'База прилагательные женский род Английский',
+        'База прилагательные средний род Английский',
+        'База прилагательные множественное число Английский',
+        'База прилагательные номер Турецкий',
+        'База прилагательные слова Турецкий',
+        'База прилагательные мужской род Турецкий',
+        'База прилагательные женский род Турецкий',
+        'База прилагательные средний род Турецкий',
+        'База прилагательные множественное число Турецкий'
+      ];
+    }
+
+    // Добавляем недостающие темы
+    themesToAdd.forEach(theme => {
+      // Находим соответствующий урок в таблице существительных для копирования метаданных
+      const nounLesson = nounsTable.data.find(row => 
+        row['Урок название'] === theme && 
+        row['Уровень изучения номер'] && 
+        row['Урок номер']
+      );
+      
+      if (nounLesson) {
+        // Создаем новую строку с существующей структурой колонок
+        const newLessonRow = {};
+        existingColumns.forEach(col => {
+          newLessonRow[col] = '';
+        });
+        
+        // Заполняем основные поля
+        newLessonRow['Уровень изучения номер'] = nounLesson['Уровень изучения номер'];
+        newLessonRow['Урок номер'] = nounLesson['Урок номер'];
+        newLessonRow['Урок название'] = theme;
+        
+        updatedAdjectivesData.push(newLessonRow);
+        addedCount++;
+      }
+    });
+
+    // Сохраняем обновленную таблицу прилагательных
+    const updatedTable = await AdjectivesTable.findOneAndUpdate(
+      { name: 'adjectives' },
+      { data: updatedAdjectivesData },
+      { upsert: true, new: true }
+    );
+
+    // Возвращаем только массив данных, а не весь объект MongoDB
+    res.json({
+      success: true,
+      message: `Themes synchronized successfully. Added ${addedCount} new themes.`,
+      addedThemes: themesToAdd,
+      data: updatedAdjectivesData // Возвращаем только массив данных
+    });
+
+  } catch (error) {
+    console.error('Error syncing themes:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Get all data (for admin panel) - ОБНОВЛЕННЫЙ
 
 // Get all data (for admin panel)
 app.get('/api/db', async (req, res) => {
   try {
-    const [words, images, numberValues, lessons, tests, testResults, flags, settings, table] = await Promise.all([
+    const [words, images, numberValues, lessons, tests, testResults, flags, settings, table, adjectivesTable] = await Promise.all([
       Word.find(),
       Image.find(),
       NumberValue.find(),
@@ -196,13 +492,14 @@ app.get('/api/db', async (req, res) => {
       TestResult.find(),
       Flag.find(),
       Settings.findOne(),
-      Table.findOne({ name: 'main' })
+      Table.findOne({ name: 'main' }),
+      AdjectivesTable.findOne({ name: 'adjectives' })
     ]);
 
     res.json({
       words,
       images,
-      numbers: numberValues, // ИСПРАВЛЕНО: сохраняем обратную совместимость
+      numbers: numberValues,
       lessons,
       tests: tests || [],
       testResults: testResults || [],
@@ -212,9 +509,11 @@ app.get('/api/db', async (req, res) => {
         bgColor: '#f0f0f0',
         fontBgColor: '#808080'
       },
-      table: table?.data || []
+      table: table?.data || [],
+      adjectivesTable: adjectivesTable?.data || []
     });
-  } catch (error) {
+  }
+  catch (error) {
     res.status(500).json({ error: error.message });
   }
 });
@@ -246,15 +545,134 @@ app.post('/api/table', async (req, res) => {
     res.status(500).json({ error: error.message });
   }
 });
+// МАРШРУТЫ ДЛЯ ТИПОВ УРОКОВ И МОДУЛЕЙ
 
-// Get table data
-app.get('/api/table', async (req, res) => {
+// Получить все типы уроков
+app.get('/api/lesson-types', async (req, res) => {
   try {
-    const table = await Table.findOne({ name: 'main' });
-    res.json(table?.data || []);
+    const types = await LessonType.find().sort('typeId');
+    res.json(types);
   } catch (error) {
     res.status(500).json({ error: error.message });
   }
+});
+
+// Создать модуль урока
+app.post('/api/lesson-modules', async (req, res) => {
+  try {
+    const module = new LessonModule(req.body);
+    const savedModule = await module.save();
+    res.json(savedModule);
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Получить модули урока
+app.get('/api/lessons/:lessonId/modules', async (req, res) => {
+  try {
+    const modules = await LessonModule.find({ 
+      lessonId: req.params.lessonId 
+    }).sort('order');
+    res.json(modules);
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Обновить модуль урока
+app.put('/api/lesson-modules/:id', async (req, res) => {
+  try {
+    const module = await LessonModule.findByIdAndUpdate(
+      req.params.id,
+      req.body,
+      { new: true }
+    );
+    res.json(module);
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Удалить модуль урока
+app.delete('/api/lesson-modules/:id', async (req, res) => {
+  try {
+    await LessonModule.findByIdAndDelete(req.params.id);
+    res.json({ message: 'Module deleted successfully' });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Создать предложение для модуля
+app.post('/api/sentences', async (req, res) => {
+  try {
+    console.log('Creating sentence with data:', req.body);
+    const sentence = new Sentence(req.body);
+    const savedSentence = await sentence.save();
+    console.log('Sentence created successfully:', savedSentence);
+    res.json(savedSentence);
+  } catch (error) {
+    console.error('Error creating sentence:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+// НОВОЕ: Обновить предложение
+app.put('/api/sentences/:id', async (req, res) => {
+  try {
+    console.log('Updating sentence:', req.params.id, req.body);
+    const sentence = await Sentence.findByIdAndUpdate(
+      req.params.id,
+      req.body,
+      { new: true }
+    );
+    if (!sentence) {
+      return res.status(404).json({ error: 'Sentence not found' });
+    }
+    console.log('Sentence updated successfully:', sentence);
+    res.json(sentence);
+  } catch (error) {
+    console.error('Error updating sentence:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+
+// НОВОЕ: Удалить предложение
+app.delete('/api/sentences/:id', async (req, res) => {
+  try {
+    const sentence = await Sentence.findByIdAndDelete(req.params.id);
+    if (!sentence) {
+      return res.status(404).json({ error: 'Sentence not found' });
+    }
+    res.json({ message: 'Sentence deleted successfully' });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Получить предложения модуля
+app.get('/api/lesson-modules/:moduleId/sentences', async (req, res) => {
+  try {
+    const sentences = await Sentence.find({ 
+      moduleId: req.params.moduleId 
+    }).sort('order');
+    console.log(`Found ${sentences.length} sentences for module ${req.params.moduleId}`);
+    res.json(sentences);
+  } catch (error) {
+    console.error('Error fetching sentences:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+// Get table data
+app.get('/api/table', async (req, res) => {
+    try {
+        const table = await Table.findOne({ name: 'main' });
+        res.json(Array.isArray(table?.data) ? table.data : []);
+    } catch (error) {
+        console.error('Error fetching table:', error);
+        res.json([]);
+    }
 });
 
 // Save all data (for admin panel)
@@ -902,7 +1320,7 @@ app.get('/api/table-languages', async (req, res) => {
     table.data.forEach(row => {
       Object.keys(row).forEach(col => {
         if (col.includes('База существительные слова')) {
-          const language = col.split(' ').pop(); // "Русский", "Английский", "Испанский" и т.д.
+          const language = col.split(' ').pop();
           if (language && language.trim() !== '') {
             languages.add(language);
           }
@@ -1085,7 +1503,120 @@ app.get('/api/learning/lessons', async (req, res) => {
     res.status(500).json({ error: error.message });
   }
 });
+app.get('/api/reorder-columns', async (req, res) => {
+  try {
+    console.log('Starting column reordering...');
+    
+    const table = await Table.findOne({ name: 'main' });
+    if (!table || !table.data) {
+      return res.status(404).json({ success: false, message: 'No table data found' });
+    }
 
+    const firstRow = table.data[0];
+    if (!firstRow) {
+      return res.status(400).json({ success: false, message: 'Table is empty' });
+    }
+
+    const currentColumns = Object.keys(firstRow);
+    console.log('Current columns:', currentColumns);
+
+    // Разделяем колонки на группы
+    const baseColumns = []; // Базовые колонки (Уровень, Урок, База изображение и т.д.)
+    const languageGroups = {}; // Группы по языкам
+    const otherColumns = []; // Остальные колонки
+    const pluralColumns = []; // Колонки множественного числа
+
+    // Сначала собираем все колонки по типам
+    currentColumns.forEach(col => {
+      if (col.includes('База существительные множественное')) {
+        pluralColumns.push(col);
+        const language = col.split(' ').pop();
+        if (!languageGroups[language]) {
+          languageGroups[language] = { number: null, word: null, plural: null };
+        }
+        languageGroups[language].plural = col;
+      }
+      else if (col.includes('База существительные слова')) {
+        const language = col.split(' ').pop();
+        if (!languageGroups[language]) {
+          languageGroups[language] = { number: null, word: null, plural: null };
+        }
+        languageGroups[language].word = col;
+      }
+      else if (col.includes('База существительные номер')) {
+        const language = col.split(' ').pop();
+        if (!languageGroups[language]) {
+          languageGroups[language] = { number: null, word: null, plural: null };
+        }
+        languageGroups[language].number = col;
+      }
+      else if (col === 'Уровень изучения номер' || 
+               col === 'Урок номер' || 
+               col === 'Урок название' || 
+               col === 'База изображение' || 
+               col === 'Картинка png') {
+        baseColumns.push(col);
+      } else {
+        otherColumns.push(col);
+      }
+    });
+
+    console.log('Language groups:', languageGroups);
+    console.log('Base columns:', baseColumns);
+    console.log('Plural columns:', pluralColumns);
+
+    // Строим новый порядок колонок
+    const newColumnOrder = [...baseColumns, ...otherColumns];
+
+    // Добавляем колонки для каждого языка в правильном порядке
+    Object.keys(languageGroups).forEach(language => {
+      const group = languageGroups[language];
+      if (group.number) newColumnOrder.push(group.number);
+      if (group.word) newColumnOrder.push(group.word);
+      if (group.plural) newColumnOrder.push(group.plural);
+    });
+
+    console.log('New column order:', newColumnOrder);
+    console.log(`Reordering: ${currentColumns.length} -> ${newColumnOrder.length} columns`);
+
+    // Перестраиваем все строки с новым порядком колонок
+    const updatedData = table.data.map(row => {
+      const newRow = {};
+      newColumnOrder.forEach(col => {
+        newRow[col] = row[col] || ''; // Сохраняем значение или пустую строку
+      });
+      return newRow;
+    });
+
+    // Сохраняем обновленные данные
+    await Table.findOneAndUpdate(
+      { name: 'main' },
+      { data: updatedData },
+      { new: true }
+    );
+
+    const result = { 
+      success: true, 
+      message: `Column reordering completed successfully!`,
+      details: {
+        previousOrder: currentColumns,
+        newOrder: newColumnOrder,
+        totalRows: updatedData.length,
+        languages: Object.keys(languageGroups)
+      }
+    };
+    
+    console.log('Reordering result:', result);
+    res.json(result);
+    
+  } catch (error) {
+    console.error('Error during column reordering:', error);
+    res.status(500).json({ 
+      success: false, 
+      message: `Reordering failed: ${error.message}` 
+    });
+  }
+});
 // Initialize server
 app.listen(PORT, async () => {
   console.log(`Server running on port ${PORT}`);
