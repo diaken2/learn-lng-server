@@ -102,6 +102,12 @@ const tableSchema = new mongoose.Schema({
 }, { timestamps: true });
 
 // Mongoose Models
+const questionWordsSchema = new mongoose.Schema({
+  data: { type: Array, required: true },
+  name: { type: String, default: 'question-words' }
+}, { timestamps: true });
+
+const QuestionWords = mongoose.model('QuestionWords', questionWordsSchema);
 const AdjectivesTable = mongoose.model('AdjectivesTable', adjectivesTableSchema);
 const Word = mongoose.model('Word', wordSchema);
 const Image = mongoose.model('Image', imageSchema);
@@ -123,7 +129,7 @@ const lessonTypeSchema = new mongoose.Schema({
 
 // Новая схема для модулей уроков
 
-// Новая схема для предложений (лексика предложение)
+// Новая схема для предложений (Фразы)
 const sentenceSchema = new mongoose.Schema({
   moduleId: { type: mongoose.Schema.Types.ObjectId, ref: 'LessonModule', required: true },
   sentenceStructure: [{
@@ -155,49 +161,221 @@ const sentenceModuleConfigSchema = new mongoose.Schema({
   }]
 }, { _id: false });
 
+const questionModuleConfigSchema = new mongoose.Schema({
+  questionColumnsCount: { type: Number, default: 3 },
+  answerColumnsCount: { type: Number, default: 3 },
+  requiresPairAnswer: { type: Boolean, default: true },
+  questionColumnConfigs: [{
+    database: { type: String, required: true },
+    filters: {
+      number: String,
+      gender: String,
+      case: String
+    }
+  }],
+  answerColumnConfigs: [{
+    database: { type: String, required: true },
+    filters: {
+      number: String,
+      gender: String,
+      case: String
+    }
+  }]
+}, { _id: false });
+
+// Обновите lessonModuleSchema чтобы включить конфигурацию Вопросов
 const lessonModuleSchema = new mongoose.Schema({
   lessonId: { type: mongoose.Schema.Types.ObjectId, ref: 'Lesson', required: true },
   typeId: { type: Number, required: true },
   order: { type: Number, required: true },
   title: { type: String },
-  config: { type: sentenceModuleConfigSchema },
+  config: { type: mongoose.Schema.Types.Mixed }, // Может быть sentenceModuleConfigSchema или questionModuleConfigSchema
   content: { type: Array },
   isActive: { type: Boolean, default: true }
 }, { timestamps: true });
+const nounCaseSchema = new mongoose.Schema({
+  imageBase: { type: String, required: true }, // связь с основным словом
+  language: { type: String, default: 'русский' },
+  singular: {
+    nominative: { type: String }, // именительный
+    genitive: { type: String },   // родительный  
+    dative: { type: String },     // дательный
+    accusative: { type: String }, // винительный
+    instrumental: { type: String }, // творительный
+    prepositional: { type: String } // предложный
+  },
+  plural: {
+    nominative: { type: String }, // именительный
+    genitive: { type: String },   // родительный  
+    dative: { type: String },     // дательный
+    accusative: { type: String }, // винительный
+    instrumental: { type: String }, // творительный
+    prepositional: { type: String } // предложный
+  }
+}, { timestamps: true });
+const prepositionsTableSchema = new mongoose.Schema({
+  data: { type: Array, required: true },
+  name: { type: String, default: 'prepositions' }
+}, { timestamps: true });
+const questionSchema = new mongoose.Schema({
+  moduleId: { type: mongoose.Schema.Types.ObjectId, ref: 'LessonModule', required: true },
+  questionStructure: [{
+    word: String,
+    wordData: {
+      imageBase: String,
+      imagePng: String,
+      translations: Map
+    },
+    database: String,
+    lesson: String,
+    number: String,
+    gender: String,
+    case: String,
+    _id: false
+  }],
+  answerStructure: [{
+    word: String,
+    wordData: {
+      imageBase: String,
+      imagePng: String,
+      translations: Map
+    },
+    database: String,
+    lesson: String,
+    number: String,
+    gender: String,
+    case: String,
+    _id: false
+  }],
+  questionImage: { type: String },
+  // ОБНОВИТЕ ЭТУ ЧАСТЬ:
+  requiresPairAnswer: { 
+    type: Boolean, 
+    default: true,
+    set: function(value) {
+      // Гарантируем, что значение всегда будет boolean
+      return value === undefined || value === null ? true : Boolean(value);
+    }
+  },
+  answerImage: { type: String },
+  hint: { type: String },
+  englishQuestion: { type: String },
+  englishAnswer: { type: String },
+  autoEnglishQuestion: { type: String },
+  autoEnglishAnswer: { type: String },
+  order: { type: Number, default: 0 }
+}, { timestamps: true });
+
+const Question = mongoose.model('Question', questionSchema);
+
+const PrepositionsTable = mongoose.model('PrepositionsTable', prepositionsTableSchema);
+
+const NounCase = mongoose.model('NounCase', nounCaseSchema);
 const LessonModule = mongoose.model('LessonModule',lessonModuleSchema);
 
 const LessonType = mongoose.model('LessonType', lessonTypeSchema);
 
 const Sentence = mongoose.model('Sentence', sentenceSchema);
-
 // Инициализация типов уроков
 async function initializeLessonTypes() {
   const typesCount = await LessonType.countDocuments();
   if (typesCount === 0) {
+    console.log('Initializing lesson types...');
     await LessonType.insertMany([
       {
         typeId: 1,
-        name: 'лексика слова',
+        name: 'Лексика',
         description: 'Урок с отдельными словами и картинками'
       },
       {
         typeId: 2,
-        name: 'тест лексика слова',
+        name: 'Тест лексика',
         description: 'Тест на знание слов'
       },
       {
         typeId: 3,
-        name: 'лексика предложение',
+        name: 'Фразы',
         description: 'Урок с составлением предложений',
         config: {
           maxColumns: 20,
           availableDatabases: ['nouns', 'adjectives', 'verbs', 'pronouns', 'numerals', 'adverbs', 'prepositions']
         }
+      },
+      {
+        typeId: 4,
+        name: 'Вопрос',
+        description: 'Урок с Вопросами и ответами',
+        config: {
+          requiresPairAnswer: true,
+          questionColumns: 3,
+          answerColumns: 3,
+          availableDatabases: ['nouns', 'adjectives', 'verbs', 'pronouns', 'numerals', 'adverbs', 'prepositions', 'question-words']
+        }
+      }
+    ]);
+    console.log('Lesson types initialized with 4 types');
+  } else {
+    // Проверяем, есть ли тип "Вопрос", если нет - добавляем
+    const existingTypes = await LessonType.find();
+    const hasQuestionType = existingTypes.some(t => t.typeId === 4);
+    
+    if (!hasQuestionType) {
+      console.log('Adding missing question type...');
+      await LessonType.create({
+        typeId: 4,
+        name: 'Вопрос',
+        description: 'Урок с Вопросами и ответами',
+        config: {
+          requiresPairAnswer: true,
+          questionColumns: 3,
+          answerColumns: 3,
+          availableDatabases: ['nouns', 'adjectives', 'verbs', 'pronouns', 'numerals', 'adverbs', 'prepositions', 'question-words']
+        }
+      });
+      console.log('Question type added successfully');
+    }
+    
+    console.log(`Found ${existingTypes.length} lesson types in database`);
+  }
+}
+
+// Инициализация типов уроков
+  const typesCount = await LessonType.countDocuments();
+  if (typesCount === 0) {
+    await LessonType.insertMany([
+      {
+        typeId: 1,
+        name: 'Лексика',
+        description: 'Урок с отдельными словами и картинками'
+      },
+      {
+        typeId: 2,
+        name: 'Тест лексика',
+        description: 'Тест на знание слов'
+      },
+      {
+        typeId: 3,
+        name: 'Фразы',
+        description: 'Урок с составлением предложений',
+        config: {
+          maxColumns: 20,
+          availableDatabases: ['nouns', 'adjectives', 'verbs', 'pronouns', 'numerals', 'adverbs', 'prepositions']
+        }
+      },
+      {
+        typeId: 4,
+        name: 'Вопрос',
+        description: 'Урок с Вопросами и ответами',
+        config: {
+          requiresPairAnswer: true,
+          questionColumns: 3,
+          answerColumns: 3,
+          availableDatabases: ['nouns', 'adjectives', 'verbs', 'pronouns', 'numerals', 'adverbs', 'prepositions', 'question-words']
+        }
       }
     ]);
     console.log('Lesson types initialized');
   }
-}
 // Initialize default data
 async function initializeDefaultData() {
   try {
@@ -270,17 +448,17 @@ async function initializeDefaultData() {
       await LessonType.insertMany([
         {
           typeId: 1,
-          name: 'лексика слова',
+          name: 'Лексика',
           description: 'Урок с отдельными словами и картинками'
         },
         {
           typeId: 2, 
-          name: 'тест лексика слова',
+          name: 'Тест лексика',
           description: 'Тест на знание слов'
         },
         {
           typeId: 3,
-          name: 'лексика предложение',
+          name: 'Фразы',
           description: 'Урок с составлением предложений',
           config: {
             maxColumns: 20,
@@ -289,11 +467,190 @@ async function initializeDefaultData() {
         }
       ]);
       console.log('Lesson types initialized');
+
+     
+const questionWordsCount = await QuestionWords.countDocuments();
+if (questionWordsCount === 0) {
+  const initialQuestionWords = [
+    {
+      'Картинка': '',
+      'Русский': 'Что',
+      'Английский': 'What',
+      'Турецкий': 'Ne'
+    },
+    {
+      'Картинка': '',
+      'Русский': 'Это',
+      'Английский': 'This',
+      'Турецкий': 'Bu'
+    },
+    {
+      'Картинка': '',
+      'Русский': 'Где', 
+      'Английский': 'Where',
+      'Турецкий': 'Nerede'
+    },
+    {
+      'Картинка': '',
+      'Русский': 'Кто',
+      'Английский': 'Who',
+      'Турецкий': 'Kim'
+    },
+    {
+      'Картинка': '',
+      'Русский': 'Когда',
+      'Английский': 'When',
+      'Турецкий': 'Ne zaman'
+    }
+  ];
+  
+  await QuestionWords.create({
+    data: initialQuestionWords,
+    name: 'question-words'
+  });
+  console.log('Default question words table created');
+  const prepositionsTableCount = await PrepositionsTable.countDocuments();
+if (prepositionsTableCount === 0) {
+  await PrepositionsTable.create({
+    data: [],
+    name: 'prepositions'
+  });
+  console.log('Default prepositions table created');
+}
+
+// И добавьте инициализацию начальных данных для предлогов:
+const prepositionsCount = await PrepositionsTable.countDocuments();
+if (prepositionsCount === 0) {
+  const initialPrepositions = [
+    {
+      'Картинка': '',
+      'Русский': 'В',
+      'Английский': 'In',
+      'Турецкий': 'İçinde'
+    },
+    {
+      'Картинка': '',
+      'Русский': 'На',
+      'Английский': 'On',
+      'Турецкий': 'Üzerinde'
+    },
+    {
+      'Картинка': '',
+      'Русский': 'Под',
+      'Английский': 'Under',
+      'Турецкий': 'Altında'
+    },
+    {
+      'Картинка': '',
+      'Русский': 'За',
+      'Английский': 'Behind',
+      'Турецкий': 'Arkasında'
+    },
+    {
+      'Картинка': '',
+      'Русский': 'Перед',
+      'Английский': 'In front of',
+      'Турецкий': 'Önünde'
+    }
+  ];
+  
+  await PrepositionsTable.create({
+    data: initialPrepositions,
+    name: 'prepositions'
+  });
+  console.log('Default prepositions table data created');
+}
+}
     }
   } catch (error) {
     console.error('Error initializing default data:', error);
   }
 }
+app.get('/api/question-words', async (req, res) => {
+  try {
+    const table = await QuestionWords.findOne({ name: 'question-words' });
+    res.json(Array.isArray(table?.data) ? table.data : []);
+  } catch (error) {
+    console.error('Error fetching question words:', error);
+    res.json([]);
+  }
+});
+app.get('/api/prepositions-table', async (req, res) => {
+  try {
+    const table = await PrepositionsTable.findOne({ name: 'prepositions' });
+    res.json(Array.isArray(table?.data) ? table.data : []);
+  } catch (error) {
+    console.error('Error fetching prepositions table:', error);
+    res.json([]);
+  }
+});
+
+// Save prepositions table data
+app.post('/api/prepositions-table', async (req, res) => {
+  try {
+    const { tableData } = req.body;
+    
+    await PrepositionsTable.findOneAndUpdate(
+      { name: 'prepositions' },
+      { data: tableData },
+      { upsert: true, new: true }
+    );
+
+    res.json({ message: 'Prepositions table data saved successfully' });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+// Save question words table
+
+app.post('/api/questions', async (req, res) => {
+  try {
+    console.log('Creating question with data:', req.body);
+    
+    // Гарантируем, что requiresPairAnswer всегда есть
+    const questionData = {
+      ...req.body,
+      requiresPairAnswer: req.body.requiresPairAnswer !== false // true по умолчанию
+    };
+    
+    const question = new Question(questionData);
+    const savedQuestion = await question.save();
+    console.log('Question created successfully:', savedQuestion);
+    res.json(savedQuestion);
+  } catch (error) {
+    console.error('Error creating question:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Получить Вопросы модуля
+app.get('/api/lesson-modules/:moduleId/questions', async (req, res) => {
+  try {
+    const questions = await Question.find({ 
+      moduleId: req.params.moduleId 
+    }).sort('order');
+    console.log(`Found ${questions.length} questions for module ${req.params.moduleId}`);
+    res.json(questions);
+  } catch (error) {
+    console.error('Error fetching questions:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+app.post('/api/question-words', async (req, res) => {
+  try {
+    const { tableData } = req.body;
+    
+    await QuestionWords.findOneAndUpdate(
+      { name: 'question-words' },
+      { data: tableData },
+      { upsert: true, new: true }
+    );
+
+    res.json({ message: 'Question words table saved successfully' });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
 app.get('/api/debug/sentences', async (req, res) => {
   try {
     const sentences = await Sentence.find().populate('moduleId');
@@ -337,7 +694,151 @@ app.get('/api/adjectives-table', async (req, res) => {
         res.json([]); // Всегда возвращаем массив при ошибке
     }
 });
+// Получить модули по ID табличного урока
+// Получить модули по ID табличного урока С УЧЕТОМ ЯЗЫКОВ
+app.get('/api/lesson-modules/by-table-lesson/:lessonId', async (req, res) => {
+  try {
+    const tableLessonId = req.params.lessonId;
+    const { studiedLanguage, hintLanguage } = req.query; // ДОБАВЛЯЕМ ПАРАМЕТРЫ ЯЗЫКОВ
+    
+    // Извлекаем информацию из ID табличного урока
+    const match = tableLessonId.match(/^table_([^_]+)_(.+)$/);
+    if (!match) {
+      return res.status(400).json({ error: 'Invalid table lesson ID format' });
+    }
+    
+    const lessonNumber = match[1];
+    const lessonTitle = decodeURIComponent(match[2]);
+    
+    console.log(`Looking for modules for table lesson: ${lessonTitle} (${lessonNumber}) with languages: ${studiedLanguage} → ${hintLanguage}`);
+    
+    // Ищем урок в базе данных по номеру, названию И ЯЗЫКАМ
+    const lesson = await Lesson.findOne({
+      lessonNumber: lessonNumber,
+      title: lessonTitle,
+      studiedLanguage: studiedLanguage?.toLowerCase(),
+      hintLanguage: hintLanguage?.toLowerCase()
+    });
+    
+    if (!lesson) {
+      console.log(`No lesson found in database for: ${lessonTitle} (${lessonNumber}) with languages ${studiedLanguage} → ${hintLanguage}`);
+      return res.json([]);
+    }
+    
+    console.log(`Found lesson in database: ${lesson._id} - ${lesson.title} (${lesson.studiedLanguage} → ${lesson.hintLanguage})`);
+    
+    // Ищем модули для найденного урока
+    const modules = await LessonModule.find({ 
+      lessonId: lesson._id,
+      isActive: true 
+    }).sort('order');
+    
+    console.log(`Found ${modules.length} modules for table lesson ${tableLessonId}`);
+    res.json(modules);
+  } catch (error) {
+    console.error('Error fetching table lesson modules:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
 
+app.post('/api/lessons/create-from-table', async (req, res) => {
+  try {
+    const { tableLessonId, studiedLanguage, hintLanguage } = req.body;
+    
+    const match = tableLessonId.match(/^table_([^_]+)_(.+)$/);
+    if (!match) {
+      return res.status(400).json({ error: 'Invalid table lesson ID format' });
+    }
+    
+    const lessonNumber = match[1];
+    const lessonTitle = decodeURIComponent(match[2]);
+    
+    // Проверяем, существует ли уже такой урок
+    const existingLesson = await Lesson.findOne({
+      lessonNumber: lessonNumber,
+      title: lessonTitle
+    });
+    
+    if (existingLesson) {
+      return res.json(existingLesson);
+    }
+    
+    // Получаем данные из таблицы
+    const table = await Table.findOne({ name: 'main' });
+    if (!table || !table.data) {
+      return res.status(404).json({ error: 'Table not found' });
+    }
+    
+    // Находим заголовок урока в таблице
+    const lessonHeader = table.data.find(row => 
+      row['Урок номер'] === lessonNumber && 
+      row['Урок название'] === lessonTitle
+    );
+    
+    if (!lessonHeader) {
+      return res.status(404).json({ error: 'Lesson not found in table' });
+    }
+    
+    // Собираем слова урока
+    const words = [];
+    let currentLesson = null;
+    let collectingWords = false;
+    
+    for (const row of table.data) {
+      if (row['Урок номер'] === lessonNumber && row['Урок название'] === lessonTitle) {
+        currentLesson = lessonTitle;
+        collectingWords = true;
+        continue;
+      }
+      
+      if (row['Урок номер'] && row['Урок номер'] !== lessonNumber) {
+        if (collectingWords) break;
+        continue;
+      }
+      
+      if (collectingWords && row['База изображение'] && row['База изображение'].trim() !== '') {
+        const translations = new Map();
+        
+        Object.keys(row).forEach(col => {
+          if (col.includes('База существительные слова')) {
+            const language = col.split(' ').pop();
+            const translation = row[col] || '';
+            if (translation.trim() !== '') {
+              translations.set(language.toLowerCase(), translation);
+            }
+          }
+        });
+        
+        words.push({
+          imageBase: row['База изображение'],
+          imagePng: row['Картинка png'] || '',
+          translations: translations
+        });
+      }
+    }
+    
+    // Создаем урок в базе данных
+    const newLesson = new Lesson({
+      title: lessonTitle,
+      level: lessonHeader['Уровень изучения номер'] || 'A1',
+      theme: lessonTitle,
+      studiedLanguage: studiedLanguage || 'русский',
+      hintLanguage: hintLanguage || 'английский',
+      words: words,
+      fontColor: '#000000',
+      bgColor: '#ffffff',
+      lessonNumber: lessonNumber
+    });
+    
+    const savedLesson = await newLesson.save();
+    console.log(`Created lesson in database for table lesson: ${lessonTitle}`);
+    
+    res.json(savedLesson);
+  } catch (error) {
+    console.error('Error creating lesson from table:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
 // Save adjectives table data
 app.post('/api/adjectives-table', async (req, res) => {
   try {
@@ -355,6 +856,48 @@ app.post('/api/adjectives-table', async (req, res) => {
   }
 });
 
+app.get('/api/noun-cases/:imageBase', async (req, res) => {
+  try {
+    const nounCase = await NounCase.findOne({ 
+      imageBase: req.params.imageBase,
+      language: 'русский'
+    });
+    res.json(nounCase || { singular: {}, plural: {} });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Save cases for a word
+app.post('/api/noun-cases', async (req, res) => {
+  try {
+    const { imageBase, singular, plural } = req.body;
+    
+    const nounCase = await NounCase.findOneAndUpdate(
+      { imageBase, language: 'русский' },
+      { singular, plural },
+      { upsert: true, new: true }
+    );
+    
+    res.json(nounCase);
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+// Получить модуль по ID
+app.get('/api/lesson-modules/:id', async (req, res) => {
+  try {
+    const module = await LessonModule.findById(req.params.id);
+    if (!module) {
+      return res.status(404).json({ error: 'Module not found' });
+    }
+    res.json(module);
+  } catch (error) {
+    console.error('Error fetching module:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+// Получить предложения модуля (уже должен быть)
 
 app.post('/api/adjectives-table/sync-themes', async (req, res) => {
   try {
@@ -483,7 +1026,10 @@ app.post('/api/adjectives-table/sync-themes', async (req, res) => {
 // Get all data (for admin panel)
 app.get('/api/db', async (req, res) => {
   try {
-    const [words, images, numberValues, lessons, tests, testResults, flags, settings, table, adjectivesTable] = await Promise.all([
+    const [
+      words, images, numberValues, lessons, tests, testResults, 
+      flags, settings, table, adjectivesTable, questionWords, prepositionsTable // ← ДОБАВЬ prepositionsTable
+    ] = await Promise.all([
       Word.find(),
       Image.find(),
       NumberValue.find(),
@@ -493,7 +1039,9 @@ app.get('/api/db', async (req, res) => {
       Flag.find(),
       Settings.findOne(),
       Table.findOne({ name: 'main' }),
-      AdjectivesTable.findOne({ name: 'adjectives' })
+      AdjectivesTable.findOne({ name: 'adjectives' }),
+      QuestionWords.findOne({ name: 'question-words' }),
+      PrepositionsTable.findOne({ name: 'prepositions' }) // ← ДОБАВЬ ЭТУ СТРОЧКУ
     ]);
 
     res.json({
@@ -510,7 +1058,9 @@ app.get('/api/db', async (req, res) => {
         fontBgColor: '#808080'
       },
       table: table?.data || [],
-      adjectivesTable: adjectivesTable?.data || []
+      adjectivesTable: adjectivesTable?.data || [],
+      questionWords: questionWords?.data || [],
+      prepositionsTable: prepositionsTable?.data || [] // ← ДОБАВЬ ЭТУ СТРОЧКУ
     });
   }
   catch (error) {
@@ -674,7 +1224,44 @@ app.get('/api/table', async (req, res) => {
         res.json([]);
     }
 });
-
+// Удалить Вопрос
+app.delete('/api/questions/:id', async (req, res) => {
+  try {
+    const question = await Question.findByIdAndDelete(req.params.id);
+    if (!question) {
+      return res.status(404).json({ error: 'Question not found' });
+    }
+    res.json({ message: 'Question deleted successfully' });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+// Маршрут для добавления недостающих типов уроков
+app.post('/api/lesson-types/add-missing', async (req, res) => {
+  try {
+    const existingTypes = await LessonType.find();
+    const hasQuestionType = existingTypes.some(t => t.typeId === 4);
+    
+    if (!hasQuestionType) {
+      await LessonType.create({
+        typeId: 4,
+        name: 'Вопрос',
+        description: 'Урок с Вопросами и ответами',
+        config: {
+          requiresPairAnswer: true,
+          questionColumns: 3,
+          answerColumns: 3,
+          availableDatabases: ['nouns', 'adjectives', 'verbs', 'pronouns', 'numerals', 'adverbs', 'prepositions', 'question-words']
+        }
+      });
+      res.json({ success: true, message: 'Question type added successfully' });
+    } else {
+      res.json({ success: true, message: 'Question type already exists' });
+    }
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
 // Save all data (for admin panel)
 app.post('/api/db', async (req, res) => {
   try {
@@ -816,6 +1403,28 @@ app.delete('/api/words/:id', async (req, res) => {
     res.json({ message: 'Word deleted successfully' });
   } catch (error) {
     res.status(500).json({ error: error.message });
+  }
+});
+app.get('/api/lesson-modules/by-lesson/:lessonId', async (req, res) => {
+  try {
+    const modules = await LessonModule.find({ 
+      lessonId: req.params.lessonId,
+      isActive: true 
+    }).sort('order');
+    
+    console.log(`Found ${modules.length} modules for lesson ${req.params.lessonId}`);
+    res.json(modules);
+  } catch (error) {
+    console.error('Error fetching lesson modules:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+app.get('/api/lessons/:id/exists', async (req, res) => {
+  try {
+    const lesson = await Lesson.findById(req.params.id);
+    res.json({ exists: !!lesson });
+  } catch (error) {
+    res.json({ exists: false });
   }
 });
 
@@ -1052,6 +1661,7 @@ app.get('/api/available-levels', async (req, res) => {
   }
 });
 
+// Получить уроки из таблицы с фильтрацией
 app.get('/api/table-lessons', async (req, res) => {
   try {
     const { level, studiedLanguage, hintLanguage } = req.query;
@@ -1072,29 +1682,14 @@ app.get('/api/table-lessons', async (req, res) => {
       return hasLevel && hasLessonNumber && hasTitle;
     });
 
-    // Применяем фильтры
-    const filteredLessons = lessons.filter(lesson => {
-      if (level && lesson['Уровень изучения номер'] !== level) return false;
-      // Для studiedLanguage и hintLanguage нужно проверить наличие соответствующих колонок
-      if (studiedLanguage) {
-        const studiedCol = `База существительные слова ${studiedLanguage}`;
-        if (!Object.keys(lesson).includes(studiedCol)) return false;
-      }
-      if (hintLanguage) {
-        const hintCol = `База существительные слова ${hintLanguage}`;
-        if (!Object.keys(lesson).includes(hintCol)) return false;
-      }
-      return true;
-    });
-
     // Преобразуем в формат для фронтенда
-    const formattedLessons = filteredLessons.map(lesson => ({
-      _id: `table_${lesson['Урок номер']}_${lesson['Урок название']}`, // Генерируем ID
+    const formattedLessons = lessons.map(lesson => ({
+      _id: `table_${lesson['Урок номер']}_${encodeURIComponent(lesson['Урок название'])}`,
       title: lesson['Урок название'],
       level: lesson['Уровень изучения номер'],
       theme: lesson['Урок название'],
-      studiedLanguage: studiedLanguage || 'русский', // Берем из фильтра
-      hintLanguage: hintLanguage || 'английский', // Берем из фильтра
+      studiedLanguage: studiedLanguage || 'русский',
+      hintLanguage: hintLanguage || 'английский',
       lessonNumber: lesson['Урок номер']
     }));
 
