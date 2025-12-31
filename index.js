@@ -837,6 +837,108 @@ app.get('/api/podcasts/:id', async (req, res) => {
 });
 
 // Обновить подкаст
+
+app.post('/api/podcasts/generate-upload-url', async (req, res) => {
+  try {
+    const { fileName, fileType, moduleId, title, duration, originalTranscript, hintTranscript, hint } = req.body;
+    
+    // Создаем запись подкаста в базе данных с статусом "uploading"
+    const podcast = new Podcast({
+      moduleId,
+      title,
+      audioUrl: 'pending', // временное значение
+      originalTranscript,
+      hintTranscript: hintTranscript || '',
+      hint: hint || '',
+      duration: parseInt(duration) || 0,
+      status: 'uploading'
+    });
+    
+    const savedPodcast = await podcast.save();
+    
+    // Генерируем уникальный ключ для файла в S3
+    const fileExt = path.extname(fileName);
+    const s3Key = `podcasts/${savedPodcast._id}${fileExt}`;
+    
+    // Генерируем presigned URL для PUT запроса
+    const uploadUrl = await s3.getSignedUrl('putObject', {
+      Bucket: process.env.YANDEX_BUCKET,
+      Key: s3Key,
+      ContentType: fileType,
+      Expires: 3600, // 1 час на загрузку
+      ACL: 'public-read'
+    });
+    
+    // Возвращаем URL для загрузки и ID подкаста
+    res.json({
+      success: true,
+      podcastId: savedPodcast._id,
+      uploadUrl,
+      key: s3Key,
+      fields: {
+        'x-amz-acl': 'public-read',
+        'Content-Type': fileType
+      }
+    });
+  } catch (error) {
+    console.error('Error generating upload URL:', error);
+    res.status(500).json({ 
+      success: false,
+      error: error.message 
+    });
+  }
+});
+
+// Колбэк после успешной загрузки в S3
+app.post('/api/podcasts/complete-upload', async (req, res) => {
+  try {
+    const { podcastId, key } = req.body;
+    
+    // Формируем публичный URL к файлу в S3
+    const audioUrl = `https://${process.env.YANDEX_BUCKET}.storage.yandexcloud.net/${key}`;
+    
+    // Обновляем запись подкаста в базе данных
+    const updatedPodcast = await Podcast.findByIdAndUpdate(
+      podcastId,
+      {
+        audioUrl,
+        status: 'completed',
+        completedAt: new Date()
+      },
+      { new: true }
+    );
+    
+    res.json({
+      success: true,
+      podcast: updatedPodcast,
+      message: 'Podcast upload completed successfully'
+    });
+  } catch (error) {
+    console.error('Error completing upload:', error);
+    res.status(500).json({ 
+      success: false,
+      error: error.message 
+    });
+  }
+});
+
+// Получить статус загрузки подкаста
+app.get('/api/podcasts/:id/status', async (req, res) => {
+  try {
+    const podcast = await Podcast.findById(req.params.id);
+    if (!podcast) {
+      return res.status(404).json({ error: 'Podcast not found' });
+    }
+    
+    res.json({
+      status: podcast.status,
+      audioUrl: podcast.audioUrl,
+      progress: podcast.progress || 0
+    });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
 app.put('/api/podcasts/:id', async (req, res) => {
   try {
     const podcast = await Podcast.findByIdAndUpdate(
