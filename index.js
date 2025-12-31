@@ -9,6 +9,8 @@ import path from 'path';
 import EasyYandexS3 from 'easy-yandex-s3';
 import { fileURLToPath } from 'url';
 import { dirname, resolve } from 'path';
+import dotenv from 'dotenv';
+dotenv.config();
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 
@@ -32,10 +34,10 @@ const storage = multer.diskStorage({
 
 const s3 = new EasyYandexS3({
   auth: {
-    accessKeyId:'YCAJEuOhpJPFzILzX93jpvN1s',
-    secretAccessKey:'YCO0PRiFE_O2RtjisK0RcQZ2efQDDFSHRCB2YwV9',
+    accessKeyId: process.env.YANDEX_ACCESS_KEY_ID,
+    secretAccessKey: process.env.YANDEX_SECRET_ACCESS_KEY,
   },
-  Bucket:'id-langlearn',
+  Bucket: process.env.YANDEX_BUCKET || 'id-langlearn',
   debug: false,
 });
 
