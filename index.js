@@ -16,19 +16,7 @@ const __dirname = dirname(__filename);
 
 const app = express();
 const PORT = process.env.PORT || 8888;
-const storage = multer.diskStorage({
-  destination: function (req, file, cb) {
-    const uploadDir = 'uploads/podcasts/';
-    if (!fs.existsSync(uploadDir)) {
-      fs.mkdirSync(uploadDir, { recursive: true });
-    }
-    cb(null, uploadDir);
-  },
-  filename: function (req, file, cb) {
-    const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1E9);
-    cb(null, uniqueSuffix + path.extname(file.originalname));
-  }
-});
+const storage = multer.memoryStorage(); //
 
 
 
@@ -42,7 +30,7 @@ const s3 = new EasyYandexS3({
 });
 
 const upload = multer({ 
-  storage: storage,
+  storage: storage, // ← memory storage
   limits: {
     fileSize: 50 * 1024 * 1024, // 50MB максимум
   },
@@ -60,6 +48,10 @@ const upload = multer({
 app.use(cors());
 app.use(express.json({ limit: '50mb' }));
 app.use(express.urlencoded({ extended: true, limit: '50mb' }));
+app.use('/api/podcasts', express.raw({ 
+  type: 'audio/*',
+  limit: '50mb' 
+}));
 
 // MongoDB connection
 const MONGODB_URI = "mongodb://learnlng_db_user:eatapple88@ac-5b9zkip-shard-00-00.spftlfo.mongodb.net:27017,ac-5b9zkip-shard-00-01.spftlfo.mongodb.net:27017,ac-5b9zkip-shard-00-02.spftlfo.mongodb.net:27017/?ssl=true&replicaSet=atlas-kb1waw-shard-0&authSource=admin&retryWrites=true&w=majority&appName=Cluster0";
@@ -704,19 +696,16 @@ if (prepositionsCount === 0) {
 }
 // Замените старую функцию uploadImageToImgbb на эту:
 
-const uploadImageToImageBan = async (imageBuffer, fileName) => {
+const uploadImageToImageBan = async (imageBuffer, fileName, mimeType = 'image/jpeg') => {
   try {
-    const CLIENT_ID = 'jKEVwUkcbZN9XiW7GnYy';
+    const CLIENT_ID = process.env.IMAGEBAN_CLIENT_ID || 'jKEVwUkcbZN9XiW7GnYy';
     
-    // Конвертируем в base64
+    // Конвертируем буфер в base64
     const base64Image = imageBuffer.toString('base64');
     
-    // Создаем FormData с помощью node-fetch
     const formData = new FormData();
     formData.append('image', base64Image);
     formData.append('name', fileName || 'upload.jpg');
-    
-    console.log('Sending request to ImageBan...');
     
     const response = await fetch('https://api.imageban.ru/v1', {
       method: 'POST',
@@ -727,8 +716,6 @@ const uploadImageToImageBan = async (imageBuffer, fileName) => {
     });
 
     const text = await response.text();
-    console.log('Raw ImageBan response:', text);
-    
     let result;
     try {
       result = JSON.parse(text);
@@ -737,19 +724,11 @@ const uploadImageToImageBan = async (imageBuffer, fileName) => {
       throw new Error('Invalid JSON response from ImageBan');
     }
     
-    console.log('Parsed ImageBan result:', result);
-    
-    // ИСПРАВЛЕНА ПРОВЕРКА ОТВЕТА
     if (result.success === true && result.data && result.data.link) {
-      console.log('Upload successful, link:', result.data.link);
-      return result.data.link;
-    } else if (result.success === true && result.data) {
-      // Иногда data может быть объектом, а не массивом
-      console.log('Upload successful (object format), link:', result.data.link);
       return result.data.link;
     } else {
-      console.error('ImageBan error or unexpected format:', result);
-      throw new Error(result.error?.message || 'Upload failed - unexpected response format');
+      console.error('ImageBan error:', result);
+      throw new Error(result.error?.message || 'Upload failed');
     }
   } catch (error) {
     console.error('Error uploading to ImageBan:', error);
@@ -775,26 +754,23 @@ app.get('/api/adjective-cases/:imageBase', async (req, res) => {
 app.post('/api/podcasts', upload.single('audioFile'), async (req, res) => {
   try {
     console.log('Creating podcast with data:', req.body);
-    console.log('Audio file:', req.file);
+    console.log('Audio file buffer size:', req.file?.buffer?.length || 0);
 
     if (!req.file) {
       return res.status(400).json({ error: 'Аудио файл обязателен' });
     }
 
-    // Используем resolve для получения полного пути
-    const fullPath = resolve(__dirname, req.file.path);
-    console.log('Full path to file:', fullPath);
+    // Теперь файл в памяти, а не на диске
+    const fileBuffer = req.file.buffer;
+    const fileName = `${Date.now()}-${Math.random().toString(36).substring(7)}${path.extname(req.file.originalname)}`;
+    
+    console.log('Uploading to Yandex S3, filename:', fileName);
 
-    // Проверяем существование файла
-    if (!fs.existsSync(fullPath)) {
-      throw new Error(`Файл не найден: ${fullPath}`);
-    }
-
-    // Загружаем файл в Yandex S3
+    // Загружаем файл напрямую из буфера в Yandex S3
     const s3Upload = await s3.Upload(
       {
-        path: fullPath,
-        name: req.file.filename,
+        buffer: fileBuffer, // ← используем buffer вместо path
+        name: fileName,
       },
       '/podcasts/'
     );
@@ -805,9 +781,6 @@ app.post('/api/podcasts', upload.single('audioFile'), async (req, res) => {
       throw new Error('Ошибка загрузки в S3: не получена ссылка на файл');
     }
 
-    // Получаем информацию о файле
-    const fileStats = fs.statSync(fullPath);
-
     // Создаем объект подкаста
     const podcastData = {
       moduleId: req.body.moduleId,
@@ -817,33 +790,20 @@ app.post('/api/podcasts', upload.single('audioFile'), async (req, res) => {
       hintTranscript: req.body.hintTranscript,
       hint: req.body.hint,
       duration: parseInt(req.body.duration) || 0,
-      fileSize: fileStats.size,
+      fileSize: fileBuffer.length,
       mimeType: req.file.mimetype
     };
 
     const podcast = new Podcast(podcastData);
     const savedPodcast = await podcast.save();
 
-    // Удаляем временный файл
-    fs.unlinkSync(fullPath);
-    console.log('Temporary file deleted');
-
+    console.log('Podcast created successfully:', savedPodcast._id);
     res.json(savedPodcast);
   } catch (error) {
     console.error('Error creating podcast:', error);
-    
-    // Удаляем временный файл при ошибке
-    if (req.file) {
-      const fullPath = resolve(__dirname, req.file.path);
-      if (fs.existsSync(fullPath)) {
-        fs.unlinkSync(fullPath);
-        console.log('Temporary file deleted after error');
-      }
-    }
-    
     res.status(500).json({ 
       error: error.message,
-      details: error.stack 
+      details: process.env.NODE_ENV === 'development' ? error.stack : undefined
     });
   }
 });
