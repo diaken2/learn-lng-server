@@ -3,9 +3,56 @@ import mongoose from 'mongoose';
 import cors from 'cors';
 import FormData from 'form-data';
 import fetch from 'node-fetch';
+import multer from 'multer';
+import fs from "fs"
+import path from 'path';
+import EasyYandexS3 from 'easy-yandex-s3';
+import { fileURLToPath } from 'url';
+import { dirname, resolve } from 'path';
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = dirname(__filename);
 
 const app = express();
 const PORT = process.env.PORT || 8888;
+const storage = multer.diskStorage({
+  destination: function (req, file, cb) {
+    const uploadDir = 'uploads/podcasts/';
+    if (!fs.existsSync(uploadDir)) {
+      fs.mkdirSync(uploadDir, { recursive: true });
+    }
+    cb(null, uploadDir);
+  },
+  filename: function (req, file, cb) {
+    const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1E9);
+    cb(null, uniqueSuffix + path.extname(file.originalname));
+  }
+});
+
+
+
+const s3 = new EasyYandexS3({
+  auth: {
+    accessKeyId:'YCAJEuOhpJPFzILzX93jpvN1s',
+    secretAccessKey:'YCO0PRiFE_O2RtjisK0RcQZ2efQDDFSHRCB2YwV9',
+  },
+  Bucket:'id-langlearn',
+  debug: false,
+});
+
+const upload = multer({ 
+  storage: storage,
+  limits: {
+    fileSize: 50 * 1024 * 1024, // 50MB максимум
+  },
+  fileFilter: function (req, file, cb) {
+    // Проверяем тип файла
+    if (file.mimetype.startsWith('audio/')) {
+      cb(null, true);
+    } else {
+      cb(new Error('Только аудио файлы разрешены!'), false);
+    }
+  }
+});
 
 // Middleware
 app.use(cors());
@@ -43,6 +90,20 @@ const imageSchema = new mongoose.Schema({
 const numberValueSchema = new mongoose.Schema({
   value: { type: String, required: true }
 }, { timestamps: true });
+// Схема для подкастов
+const podcastSchema = new mongoose.Schema({
+  moduleId: { type: mongoose.Schema.Types.ObjectId, ref: 'LessonModule', required: true },
+  title: { type: String, required: true },
+  audioUrl: { type: String, required: true }, // Ссылка на аудио в Yandex S3
+  originalTranscript: { type: String, required: true }, // Титры на оригинальном языке
+  hintTranscript: { type: String }, // Титры на языке подсказки
+  hint: { type: String }, // Подсказка
+  order: { type: Number, default: 0 },
+  duration: { type: Number }, // Длительность в секундах
+  fileSize: { type: Number }, // Размер файла в байтах
+  mimeType: { type: String } // MIME тип файла
+}, { timestamps: true });
+
 
 const lessonSchema = new mongoose.Schema({
   title: { type: String, required: true },
@@ -59,7 +120,18 @@ const lessonSchema = new mongoose.Schema({
   bgColor: { type: String, default: '#f0f0f0' },
   lessonNumber: { type: String, required: true }
 }, { timestamps: true });
-
+const testModuleConfigSchema = new mongoose.Schema({
+  database: { type: String, required: true },
+  wordCount: { type: Number, required: true },
+  theme: { type: String, required: true },
+  words: [{
+    imageBase: String,
+    imagePng: String,
+    translations: Map,
+    displayWord: String,
+    _id: false
+  }]
+}, { _id: false });
 const testSchema = new mongoose.Schema({
   lessonId: { type: String, required: true },
   studiedLanguage: { type: String, required: true },
@@ -107,6 +179,58 @@ const questionWordsSchema = new mongoose.Schema({
   name: { type: String, default: 'question-words' }
 }, { timestamps: true });
 
+// Схема для падежей прилагательных
+const adjectiveCaseSchema = new mongoose.Schema({
+  imageBase: { type: String, required: true },
+  language: { 
+    type: String, 
+    required: true,
+    enum: ['русский', 'французский', 'немецкий', 'арабский', 'китайский'] // и т.д.
+  },
+  // Для русского - полная структура
+  singular: {
+    masculine: {
+      nominative: { type: String },
+      genitive: { type: String },
+      dative: { type: String },
+      accusative: { type: String },
+      instrumental: { type: String },
+      prepositional: { type: String }
+    },
+    feminine: {
+      nominative: { type: String },
+      genitive: { type: String },
+      dative: { type: String },
+      accusative: { type: String },
+      instrumental: { type: String },
+      prepositional: { type: String }
+    },
+    neuter: {
+      nominative: { type: String },
+      genitive: { type: String },
+      dative: { type: String },
+      accusative: { type: String },
+      instrumental: { type: String },
+      prepositional: { type: String }
+    }
+  },
+  plural: {
+    nominative: { type: String },
+    genitive: { type: String },
+    dative: { type: String },
+    accusative: { type: String },
+    instrumental: { type: String },
+    prepositional: { type: String }
+  },
+  // Для других языков могут быть другие поля
+  config: {
+    type: mongoose.Schema.Types.Mixed,
+    default: {}
+  }
+}, { timestamps: true });
+
+const AdjectiveCase = mongoose.model('AdjectiveCase', adjectiveCaseSchema);
+const Podcast = mongoose.model('Podcast', podcastSchema);
 const QuestionWords = mongoose.model('QuestionWords', questionWordsSchema);
 const AdjectivesTable = mongoose.model('AdjectivesTable', adjectivesTableSchema);
 const Word = mongoose.model('Word', wordSchema);
@@ -130,6 +254,7 @@ const lessonTypeSchema = new mongoose.Schema({
 // Новая схема для модулей уроков
 
 // Новая схема для предложений (Фразы)
+// Обновите sentenceSchema для включения падежей
 const sentenceSchema = new mongoose.Schema({
   moduleId: { type: mongoose.Schema.Types.ObjectId, ref: 'LessonModule', required: true },
   sentenceStructure: [{
@@ -143,6 +268,7 @@ const sentenceSchema = new mongoose.Schema({
     lesson: String,
     number: String,
     gender: String,
+    case: String, // ДОБАВЛЕНО
     _id: false
   }],
   image: { type: String },
@@ -189,7 +315,7 @@ const lessonModuleSchema = new mongoose.Schema({
   typeId: { type: Number, required: true },
   order: { type: Number, required: true },
   title: { type: String },
-  config: { type: mongoose.Schema.Types.Mixed }, // Может быть sentenceModuleConfigSchema или questionModuleConfigSchema
+  config: { type: mongoose.Schema.Types.Mixed }, // Может быть любой конфиг
   content: { type: Array },
   isActive: { type: Boolean, default: true }
 }, { timestamps: true });
@@ -287,11 +413,16 @@ async function initializeLessonTypes() {
         name: 'Лексика',
         description: 'Урок с отдельными словами и картинками'
       },
-      {
-        typeId: 2,
-        name: 'Тест лексика',
-        description: 'Тест на знание слов'
-      },
+    {
+  typeId: 2,
+  name: 'Тест лексика',
+  description: 'Тест на знание слов (интегрированный в модули)',
+  config: {
+    supportsWordSelection: true,
+    requiresWordCount: true,
+    availableDatabases: ['nouns', 'adjectives', 'verbs', 'question-words', 'prepositions']
+  }
+},
       {
         typeId: 3,
         name: 'Фразы',
@@ -311,7 +442,17 @@ async function initializeLessonTypes() {
           answerColumns: 3,
           availableDatabases: ['nouns', 'adjectives', 'verbs', 'pronouns', 'numerals', 'adverbs', 'prepositions', 'question-words']
         }
+      },
+      {
+      typeId: 5,
+      name: 'Подкаст',
+      description: 'Аудио урок с титрами и подсказками',
+      config: {
+        hasAudio: true,
+        requiresTranscript: true,
+        supportsMultipleLanguages: true
       }
+    }
     ]);
     console.log('Lesson types initialized with 4 types');
   } else {
@@ -412,14 +553,7 @@ async function initializeDefaultData() {
     }
 
     // Check if adjectives table exists, if not create empty table
-    const adjectivesTableCount = await AdjectivesTable.countDocuments();
-    if (adjectivesTableCount === 0) {
-      await AdjectivesTable.create({
-        data: [],
-        name: 'adjectives'
-      });
-      console.log('Default adjectives table created');
-    }
+    
 
     // Check if words exist, if not create sample words
     const wordsCount = await Word.countDocuments();
@@ -566,6 +700,294 @@ if (prepositionsCount === 0) {
     console.error('Error initializing default data:', error);
   }
 }
+// Замените старую функцию uploadImageToImgbb на эту:
+
+const uploadImageToImageBan = async (imageBuffer, fileName) => {
+  try {
+    const CLIENT_ID = 'jKEVwUkcbZN9XiW7GnYy';
+    
+    // Конвертируем в base64
+    const base64Image = imageBuffer.toString('base64');
+    
+    // Создаем FormData с помощью node-fetch
+    const formData = new FormData();
+    formData.append('image', base64Image);
+    formData.append('name', fileName || 'upload.jpg');
+    
+    console.log('Sending request to ImageBan...');
+    
+    const response = await fetch('https://api.imageban.ru/v1', {
+      method: 'POST',
+      headers: {
+        'Authorization': `TOKEN ${CLIENT_ID}`,
+      },
+      body: formData
+    });
+
+    const text = await response.text();
+    console.log('Raw ImageBan response:', text);
+    
+    let result;
+    try {
+      result = JSON.parse(text);
+    } catch (parseError) {
+      console.error('Failed to parse JSON:', parseError);
+      throw new Error('Invalid JSON response from ImageBan');
+    }
+    
+    console.log('Parsed ImageBan result:', result);
+    
+    // ИСПРАВЛЕНА ПРОВЕРКА ОТВЕТА
+    if (result.success === true && result.data && result.data.link) {
+      console.log('Upload successful, link:', result.data.link);
+      return result.data.link;
+    } else if (result.success === true && result.data) {
+      // Иногда data может быть объектом, а не массивом
+      console.log('Upload successful (object format), link:', result.data.link);
+      return result.data.link;
+    } else {
+      console.error('ImageBan error or unexpected format:', result);
+      throw new Error(result.error?.message || 'Upload failed - unexpected response format');
+    }
+  } catch (error) {
+    console.error('Error uploading to ImageBan:', error);
+    throw error;
+  }
+};
+app.get('/api/adjective-cases/:imageBase', async (req, res) => {
+  try {
+    const adjectiveCase = await AdjectiveCase.findOne({ 
+      imageBase: req.params.imageBase,
+      language: 'русский'
+    });
+    res.json(adjectiveCase || { 
+      singular: { masculine: {}, feminine: {}, neuter: {} },
+      plural: {}
+    });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+
+app.post('/api/podcasts', upload.single('audioFile'), async (req, res) => {
+  try {
+    console.log('Creating podcast with data:', req.body);
+    console.log('Audio file:', req.file);
+
+    if (!req.file) {
+      return res.status(400).json({ error: 'Аудио файл обязателен' });
+    }
+
+    // Используем resolve для получения полного пути
+    const fullPath = resolve(__dirname, req.file.path);
+    console.log('Full path to file:', fullPath);
+
+    // Проверяем существование файла
+    if (!fs.existsSync(fullPath)) {
+      throw new Error(`Файл не найден: ${fullPath}`);
+    }
+
+    // Загружаем файл в Yandex S3
+    const s3Upload = await s3.Upload(
+      {
+        path: fullPath,
+        name: req.file.filename,
+      },
+      '/podcasts/'
+    );
+
+    console.log('S3 upload result:', s3Upload);
+
+    if (!s3Upload || !s3Upload.Location) {
+      throw new Error('Ошибка загрузки в S3: не получена ссылка на файл');
+    }
+
+    // Получаем информацию о файле
+    const fileStats = fs.statSync(fullPath);
+
+    // Создаем объект подкаста
+    const podcastData = {
+      moduleId: req.body.moduleId,
+      title: req.body.title,
+      audioUrl: s3Upload.Location,
+      originalTranscript: req.body.originalTranscript,
+      hintTranscript: req.body.hintTranscript,
+      hint: req.body.hint,
+      duration: parseInt(req.body.duration) || 0,
+      fileSize: fileStats.size,
+      mimeType: req.file.mimetype
+    };
+
+    const podcast = new Podcast(podcastData);
+    const savedPodcast = await podcast.save();
+
+    // Удаляем временный файл
+    fs.unlinkSync(fullPath);
+    console.log('Temporary file deleted');
+
+    res.json(savedPodcast);
+  } catch (error) {
+    console.error('Error creating podcast:', error);
+    
+    // Удаляем временный файл при ошибке
+    if (req.file) {
+      const fullPath = resolve(__dirname, req.file.path);
+      if (fs.existsSync(fullPath)) {
+        fs.unlinkSync(fullPath);
+        console.log('Temporary file deleted after error');
+      }
+    }
+    
+    res.status(500).json({ 
+      error: error.message,
+      details: error.stack 
+    });
+  }
+});
+
+// Получить подкасты модуля
+app.get('/api/lesson-modules/:moduleId/podcasts', async (req, res) => {
+  try {
+    const podcasts = await Podcast.find({ 
+      moduleId: req.params.moduleId 
+    }).sort('order');
+    
+    res.json(podcasts);
+  } catch (error) {
+    console.error('Error fetching podcasts:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Получить подкаст по ID
+app.get('/api/podcasts/:id', async (req, res) => {
+  try {
+    const podcast = await Podcast.findById(req.params.id);
+    if (!podcast) {
+      return res.status(404).json({ error: 'Подкаст не найден' });
+    }
+    res.json(podcast);
+  } catch (error) {
+    console.error('Error fetching podcast:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Обновить подкаст
+app.put('/api/podcasts/:id', async (req, res) => {
+  try {
+    const podcast = await Podcast.findByIdAndUpdate(
+      req.params.id,
+      req.body,
+      { new: true }
+    );
+    
+    if (!podcast) {
+      return res.status(404).json({ error: 'Подкаст не найден' });
+    }
+    
+    res.json(podcast);
+  } catch (error) {
+    console.error('Error updating podcast:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Удалить подкаст (также удаляем из S3)
+app.delete('/api/podcasts/:id', async (req, res) => {
+  try {
+    const podcast = await Podcast.findById(req.params.id);
+    
+    if (!podcast) {
+      return res.status(404).json({ error: 'Подкаст не найден' });
+    }
+
+    // Удаляем файл из S3
+    if (podcast.audioUrl) {
+      try {
+        const key = podcast.audioUrl.split('/').pop();
+        await s3.Remove(`/podcasts/${key}`);
+      } catch (s3Error) {
+        console.error('Error deleting from S3:', s3Error);
+      }
+    }
+
+    await Podcast.findByIdAndDelete(req.params.id);
+    
+    res.json({ message: 'Подкаст удален успешно' });
+  } catch (error) {
+    console.error('Error deleting podcast:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+app.get('/api/adjective-cases/:imageBase/:language', async (req, res) => {
+  try {
+    const { imageBase, language } = req.params;
+    
+    const adjectiveCase = await AdjectiveCase.findOne({ 
+      imageBase: imageBase,
+      language: language
+    });
+    
+    // Если не найдено для конкретного языка, пробуем русский как fallback
+    if (!adjectiveCase && language !== 'русский') {
+      const russianCase = await AdjectiveCase.findOne({
+        imageBase: imageBase,
+        language: 'русский'
+      });
+      
+      if (russianCase) {
+        return res.json({
+          ...russianCase.toObject(),
+          isFallback: true,
+          originalLanguage: 'русский'
+        });
+      }
+    }
+    
+    res.json(adjectiveCase || { 
+      singular: { masculine: {}, feminine: {}, neuter: {} },
+      plural: {},
+      language: language
+    });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+app.post('/api/adjective-cases', async (req, res) => {
+  try {
+    const { imageBase, language, singular, plural, config } = req.body;
+    
+    const adjectiveCase = await AdjectiveCase.findOneAndUpdate(
+      { imageBase, language },
+      { singular, plural, config },
+      { upsert: true, new: true }
+    );
+    
+    res.json(adjectiveCase);
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+// Сохранить/обновить падежи прилагательного
+app.post('/api/adjective-cases', async (req, res) => {
+  try {
+    const { imageBase, singular, plural } = req.body;
+    
+    const adjectiveCase = await AdjectiveCase.findOneAndUpdate(
+      { imageBase, language: 'русский' },
+      { singular, plural },
+      { upsert: true, new: true }
+    );
+    
+    res.json(adjectiveCase);
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
 app.get('/api/question-words', async (req, res) => {
   try {
     const table = await QuestionWords.findOne({ name: 'question-words' });
@@ -623,7 +1045,116 @@ app.post('/api/questions', async (req, res) => {
   }
 });
 
+
+
+// Маршрут для загрузки изображения вопроса
+app.post('/api/questions/upload-image', async (req, res) => {
+  try {
+    const { imageBase64 } = req.body;
+    if (!imageBase64) {
+      return res.status(400).json({ success: false, error: 'No image data provided' });
+    }
+
+    // Проверяем, является ли это data URL (data:image/...)
+    let base64Data;
+    if (imageBase64.startsWith('data:')) {
+      // Извлекаем base64 часть из data URL
+      const matches = imageBase64.match(/^data:.+\/(.+);base64,(.*)$/);
+      if (!matches || matches.length !== 3) {
+        return res.status(400).json({ success: false, error: 'Invalid image data format' });
+      }
+      base64Data = matches[2];
+    } else {
+      // Уже чистая base64 строка
+      base64Data = imageBase64;
+    }
+
+    // Конвертируем base64 в буфер
+    const imageBuffer = Buffer.from(base64Data, 'base64');
+    
+    // Генерируем имя файла
+    const fileName = `question_${Date.now()}.jpg`;
+    
+    // Загружаем на ImageBan
+    const imageUrl = await uploadImageToImageBan(imageBuffer, fileName, 'image/jpeg');
+    
+    return res.json({
+      success: true,
+      imageUrl: imageUrl,
+      thumbUrl: imageUrl,
+      deleteUrl: null
+    });
+    
+  } catch (error) {
+    console.error('Error uploading question image:', error);
+    res.status(500).json({ 
+      success: false, 
+      error: error.message || 'Server error' 
+    });
+  }
+});
 // Получить Вопросы модуля
+app.get('/api/module-test/:moduleId', async (req, res) => {
+  try {
+    const module = await LessonModule.findById(req.params.moduleId);
+    if (!module) {
+      return res.status(404).json({ error: 'Module not found' });
+    }
+
+    if (module.typeId !== 2) {
+      return res.status(400).json({ error: 'This module is not a test module' });
+    }
+
+    // Получаем урок для языковых настроек
+    const lesson = await Lesson.findById(module.lessonId);
+    if (!lesson) {
+      return res.status(404).json({ error: 'Lesson not found' });
+    }
+
+    const testData = {
+      moduleId: module._id,
+      title: module.title || `Тест по теме "${module.config?.theme || 'неизвестная тема'}"`,
+      studiedLanguage: lesson.studiedLanguage,
+      hintLanguage: lesson.hintLanguage,
+      level: lesson.level,
+      theme: module.config?.theme || 'Тест',
+      words: module.config?.words || [],
+      config: module.config,
+      fontColor: lesson.fontColor,
+      bgColor: lesson.bgColor
+    };
+
+    res.json(testData);
+  } catch (error) {
+    console.error('Error fetching module test:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+// Маршрут для сохранения результатов теста из модуля
+app.post('/api/module-test/results', async (req, res) => {
+  try {
+    const { moduleId, userId, score, totalQuestions, incorrectWords } = req.body;
+    
+    const testResult = await TestResult.create({
+      moduleId, // Теперь сохраняем moduleId вместо testId
+      userId: userId || 'anonymous',
+      score,
+      totalQuestions,
+      incorrectWords,
+      testType: 'module', // Добавляем тип теста
+      completedAt: new Date()
+    });
+    
+    res.json({ 
+      success: true, 
+      message: 'Test results saved successfully',
+      result: testResult
+    });
+  } catch (error) {
+    console.error('Error saving test results:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
 app.get('/api/lesson-modules/:moduleId/questions', async (req, res) => {
   try {
     const questions = await Question.find({ 
@@ -1455,38 +1986,42 @@ app.post('/api/upload-image', async (req, res) => {
       return res.status(400).json({ success: false, error: 'No image data provided' });
     }
 
-    // Ваш IMGBB ключ (храните в env в проде)
-    const IMGBB_API_KEY = process.env.IMGBB_API_KEY || '610a7ea1405eee7735cbe4901efe239d';
-
-    // Формируем form-data: сюда передаём именно чистую base64 строку
-    const formData = new FormData();
-    formData.append('image', imageBase64);
-
-    // Важно: передать заголовки formData.getHeaders()
-    const response = await fetch(`https://api.imgbb.com/1/upload?key=${IMGBB_API_KEY}`, {
-      method: 'POST',
-      headers: formData.getHeaders ? formData.getHeaders() : {},
-      body: formData
-    });
-
-    const result = await response.json();
-
-    if (result && result.success) {
-      return res.json({
-        success: true,
-        imageUrl: result.data.url,
-        thumbUrl: result.data.thumb?.url,
-        deleteUrl: result.data.delete_url
-      });
+    // Проверяем, является ли это data URL (data:image/...)
+    let base64Data;
+    if (imageBase64.startsWith('data:')) {
+      // Извлекаем base64 часть из data URL
+      const matches = imageBase64.match(/^data:.+\/(.+);base64,(.*)$/);
+      if (!matches || matches.length !== 3) {
+        return res.status(400).json({ success: false, error: 'Invalid image data format' });
+      }
+      base64Data = matches[2];
     } else {
-      return res.status(500).json({
-        success: false,
-        error: (result && (result.error?.message || result.error)) || 'Upload failed'
-      });
+      // Уже чистая base64 строка
+      base64Data = imageBase64;
     }
+
+    // Конвертируем base64 в буфер
+    const imageBuffer = Buffer.from(base64Data, 'base64');
+    
+    // Генерируем имя файла
+    const fileName = `image_${Date.now()}.jpg`;
+    
+    // Загружаем на ImageBan
+    const imageUrl = await uploadImageToImageBan(imageBuffer, fileName, 'image/jpeg');
+    
+    return res.json({
+      success: true,
+      imageUrl: imageUrl,
+      thumbUrl: imageUrl, // ImageBan не возвращает отдельно thumbnail, используем ту же ссылку
+      deleteUrl: null // ImageBan не предоставляет delete URL при гостевой загрузке
+    });
+    
   } catch (error) {
     console.error('upload-image error:', error);
-    res.status(500).json({ success: false, error: error.message || 'Server error' });
+    res.status(500).json({ 
+      success: false, 
+      error: error.message || 'Server error' 
+    });
   }
 });
 
@@ -2210,6 +2745,499 @@ app.get('/api/reorder-columns', async (req, res) => {
       success: false, 
       message: `Reordering failed: ${error.message}` 
     });
+  }
+});
+
+// Вставь в бэкенд ПЕРЕД app.listen():
+// Добавить тему "Цвета" в таблицу прилагательных
+// Умное добавление темы "Цвета" - синхронизирует с существующими языками
+// Добавить тему "Цвета" с переводами на языки из таблицы существительных
+// Создать таблицу прилагательных с нуля и добавить тему "Цвета"
+app.get('/api/adjectives-table/create-with-colors', async (req, res) => {
+  try {
+    console.log('=== СОЗДАНИЕ ТАБЛИЦЫ ПРИЛАГАТЕЛЬНЫХ С НУЛЯ С ТЕМОЙ "ЦВЕТА" ===');
+    
+    // 1. Удаляем старую таблицу (если есть)
+    await AdjectivesTable.deleteMany({ name: 'adjectives' });
+    console.log('Старая таблица удалена');
+    
+    // 2. Базовые языки которые всегда должны быть
+    const baseLanguages = ['Русский', 'Английский', 'Турецкий', 'Испанский', 'Немецкий', 'Французский'];
+    
+    // 3. Создаём структуру колонок
+    const baseColumns = [
+      'Уровень изучения номер',
+      'Урок номер',
+      'Урок название',
+      'База изображение',
+      'Картинка png'
+    ];
+    
+    // Добавляем колонки для каждого языка
+    baseLanguages.forEach(language => {
+      baseColumns.push(`База прилагательные номер ${language}`);
+      baseColumns.push(`База прилагательные слова ${language}`);
+      baseColumns.push(`База прилагательные мужской род ${language}`);
+      baseColumns.push(`База прилагательные женский род ${language}`);
+      baseColumns.push(`База прилагательные средний род ${language}`);
+      baseColumns.push(`База прилагательные множественное число ${language}`);
+    });
+    
+    console.log(`Создано колонок: ${baseColumns.length} для ${baseLanguages.length} языков`);
+    
+    // 4. Создаём данные для таблицы
+    const tableData = [];
+    
+    // 5. Тема 1: Цвета (урок 1.1)
+    const colorsThemeHeader = {};
+    baseColumns.forEach(col => {
+      colorsThemeHeader[col] = '';
+    });
+    colorsThemeHeader['Уровень изучения номер'] = 'A1';
+    colorsThemeHeader['Урок номер'] = '1.1';
+    colorsThemeHeader['Урок название'] = 'Цвета';
+    
+    tableData.push(colorsThemeHeader);
+    
+    // 6. РЕАЛЬНЫЕ ПЕРЕВОДЫ ЦВЕТОВ
+    const colors = [
+      {
+        id: '1',
+        imageBase: '1.1.1',
+        imagePng: 'https://i.ibb.co/4F8MZbP/red-color.png',
+        translations: {
+          Русский: { masculine: 'красный', feminine: 'красная', neuter: 'красное', plural: 'красные' },
+          Английский: 'red',
+          Турецкий: 'kırmızı',
+          Испанский: 'rojo',
+          Немецкий: 'rot',
+          Французский: 'rouge'
+        }
+      },
+      {
+        id: '2',
+        imageBase: '1.1.2',
+        imagePng: 'https://i.ibb.co/0Vz6YxC/white-color.png',
+        translations: {
+          Русский: { masculine: 'белый', feminine: 'белая', neuter: 'белое', plural: 'белые' },
+          Английский: 'white',
+          Турецкий: 'beyaz',
+          Испанский: 'blanco',
+          Немецкий: 'weiß',
+          Французский: 'blanc'
+        }
+      },
+      {
+        id: '3',
+        imageBase: '1.1.3',
+        imagePng: 'https://i.ibb.co/D9t3RQF/blue-color.png',
+        translations: {
+          Русский: { masculine: 'синий', feminine: 'синяя', neuter: 'синее', plural: 'синие' },
+          Английский: 'blue',
+          Турецкий: 'mavi',
+          Испанский: 'azul',
+          Немецкий: 'blau',
+          Французский: 'bleu'
+        }
+      },
+      {
+        id: '4',
+        imageBase: '1.1.4',
+        imagePng: 'https://i.ibb.co/LJkF2qt/green-color.png',
+        translations: {
+          Русский: { masculine: 'зеленый', feminine: 'зеленая', neuter: 'зеленое', plural: 'зеленые' },
+          Английский: 'green',
+          Турецкий: 'yeşil',
+          Испанский: 'verde',
+          Немецкий: 'grün',
+          Французский: 'vert'
+        }
+      },
+      {
+        id: '5',
+        imageBase: '1.1.5',
+        imagePng: 'https://i.ibb.co/r2WgyYt/black-color.png',
+        translations: {
+          Русский: { masculine: 'черный', feminine: 'черная', neuter: 'черное', plural: 'черные' },
+          Английский: 'black',
+          Турецкий: 'siyah',
+          Испанский: 'negro',
+          Немецкий: 'schwarz',
+          Французский: 'noir'
+        }
+      },
+      {
+        id: '6',
+        imageBase: '1.1.6',
+        imagePng: 'https://i.ibb.co/GV7LqRf/yellow-color.png',
+        translations: {
+          Русский: { masculine: 'желтый', feminine: 'желтая', neuter: 'желтое', plural: 'желтые' },
+          Английский: 'yellow',
+          Турецкий: 'sarı',
+          Испанский: 'amarillo',
+          Немецкий: 'gelb',
+          Французский: 'jaune'
+        }
+      }
+    ];
+    
+    // 7. Добавляем цвета в таблицу
+    colors.forEach((color, index) => {
+      const colorRow = {};
+      baseColumns.forEach(col => {
+        colorRow[col] = '';
+      });
+      
+      // Базовые поля
+      colorRow['База изображение'] = color.imageBase;
+      colorRow['Картинка png'] = color.imagePng;
+      
+      // Заполняем для каждого языка
+      baseLanguages.forEach(language => {
+        // Номер для языка
+        const numberCol = `База прилагательные номер ${language}`;
+        colorRow[numberCol] = `${color.imageBase}.${index + 1}`;
+        
+        // Переводы
+        if (color.translations[language]) {
+          const translation = color.translations[language];
+          
+          // Для русского - полная структура
+          if (language === 'Русский' && typeof translation === 'object') {
+            colorRow[`База прилагательные мужской род ${language}`] = translation.masculine;
+            colorRow[`База прилагательные женский род ${language}`] = translation.feminine;
+            colorRow[`База прилагательные средний род ${language}`] = translation.neuter;
+            colorRow[`База прилагательные множественное число ${language}`] = translation.plural;
+            colorRow[`База прилагательные слова ${language}`] = translation.masculine;
+          }
+          // Для других языков - просто слово
+          else if (typeof translation === 'string') {
+            colorRow[`База прилагательные слова ${language}`] = translation;
+            // Для совместимости заполняем остальные колонки
+            colorRow[`База прилагательные мужской род ${language}`] = translation;
+            colorRow[`База прилагательные женский род ${language}`] = translation;
+            colorRow[`База прилагательные средний род ${language}`] = translation;
+            colorRow[`База прилагательные множественное число ${language}`] = translation;
+          }
+        }
+      });
+      
+      tableData.push(colorRow);
+    });
+    
+    // 8. Тема 2: Характеристики (урок 1.2)
+    const characteristicsThemeHeader = {};
+    baseColumns.forEach(col => {
+      characteristicsThemeHeader[col] = '';
+    });
+    characteristicsThemeHeader['Уровень изучения номер'] = 'A1';
+    characteristicsThemeHeader['Урок номер'] = '1.2';
+    characteristicsThemeHeader['Урок название'] = 'Характеристики';
+    
+    tableData.push(characteristicsThemeHeader);
+    
+    // 9. Характеристики
+    const characteristics = [
+      {
+        id: '1',
+        imageBase: '1.2.1',
+        imagePng: 'https://i.ibb.co/t3tY2H9/big.png',
+        translations: {
+          Русский: { masculine: 'большой', feminine: 'большая', neuter: 'большое', plural: 'большие' },
+          Английский: 'big',
+          Турецкий: 'büyük',
+          Испанский: 'grande',
+          Немецкий: 'groß',
+          Французский: 'grand'
+        }
+      },
+      {
+        id: '2',
+        imageBase: '1.2.2',
+        imagePng: 'https://i.ibb.co/7QqjV0H/small.png',
+        translations: {
+          Русский: { masculine: 'маленький', feminine: 'маленькая', neuter: 'маленькое', plural: 'маленькие' },
+          Английский: 'small',
+          Турецкий: 'küçük',
+          Испанский: 'pequeño',
+          Немецкий: 'klein',
+          Французский: 'petit'
+        }
+      },
+      {
+        id: '3',
+        imageBase: '1.2.3',
+        imagePng: 'https://i.ibb.co/0G5MkFk/beautiful.png',
+        translations: {
+          Русский: { masculine: 'красивый', feminine: 'красивая', neuter: 'красивое', plural: 'красивые' },
+          Английский: 'beautiful',
+          Турецкий: 'güzel',
+          Испанский: 'hermoso',
+          Немецкий: 'schön',
+          Французский: 'beau'
+        }
+      }
+    ];
+    
+    // 10. Добавляем характеристики
+    characteristics.forEach((char, index) => {
+      const charRow = {};
+      baseColumns.forEach(col => {
+        charRow[col] = '';
+      });
+      
+      charRow['База изображение'] = char.imageBase;
+      charRow['Картинка png'] = char.imagePng;
+      
+      baseLanguages.forEach(language => {
+        const numberCol = `База прилагательные номер ${language}`;
+        charRow[numberCol] = `${char.imageBase}.${index + 1}`;
+        
+        if (char.translations[language]) {
+          const translation = char.translations[language];
+          
+          if (language === 'Русский' && typeof translation === 'object') {
+            charRow[`База прилагательные мужской род ${language}`] = translation.masculine;
+            charRow[`База прилагательные женский род ${language}`] = translation.feminine;
+            charRow[`База прилагательные средний род ${language}`] = translation.neuter;
+            charRow[`База прилагательные множественное число ${language}`] = translation.plural;
+            charRow[`База прилагательные слова ${language}`] = translation.masculine;
+          }
+          else if (typeof translation === 'string') {
+            charRow[`База прилагательные слова ${language}`] = translation;
+            charRow[`База прилагательные мужской род ${language}`] = translation;
+            charRow[`База прилагательные женский род ${language}`] = translation;
+            charRow[`База прилагательные средний род ${language}`] = translation;
+            charRow[`База прилагательные множественное число ${language}`] = translation;
+          }
+        }
+      });
+      
+      tableData.push(charRow);
+    });
+    
+    // 11. Создаём таблицу
+    const newTable = await AdjectivesTable.create({
+      data: tableData,
+      name: 'adjectives'
+    });
+    
+    console.log(`✅ Таблица создана! Всего строк: ${tableData.length}`);
+    console.log(`✅ Темы: "Цвета" (${colors.length} слов), "Характеристики" (${characteristics.length} слов)`);
+    
+    // 12. Формируем отчёт
+    const colorExamples = colors.map(c => ({
+      русский: c.translations.Русский.masculine,
+      английский: c.translations.Английский,
+      турецкий: c.translations.Турецкий,
+      испанский: c.translations.Испанский
+    }));
+    
+    res.json({
+      success: true,
+      message: '✅ Таблица прилагательных создана с нуля с темами!',
+      details: {
+        totalRows: tableData.length,
+        themes: [
+          { name: 'Цвета', lessonNumber: '1.1', words: colors.length },
+          { name: 'Характеристики', lessonNumber: '1.2', words: characteristics.length }
+        ],
+        languages: baseLanguages,
+        columnsCreated: baseColumns.length,
+        colorExamples: colorExamples,
+        characteristicsExamples: characteristics.map(c => ({
+          русский: c.translations.Русский.masculine,
+          английский: c.translations.Английский,
+          турецкий: c.translations.Турецкий
+        }))
+      }
+    });
+    
+  } catch (error) {
+    console.error('Ошибка создания таблицы:', error);
+    res.status(500).json({ 
+      success: false,
+      error: error.message,
+      stack: error.stack 
+    });
+  }
+});
+
+// Добавь также эндпоинт для падежей прилагательных
+app.get('/api/restore-adjective-cases', async (req, res) => {
+  try {
+    // Восстанавливаем падежи для основных прилагательных
+    const casesToRestore = [
+      {
+        imageBase: '1.1.1', // красный
+        language: 'русский',
+        singular: {
+          masculine: {
+            nominative: 'красный',
+            genitive: 'красного',
+            dative: 'красному',
+            accusative: 'красный',
+            instrumental: 'красным',
+            prepositional: 'красном'
+          },
+          feminine: {
+            nominative: 'красная',
+            genitive: 'красной',
+            dative: 'красной',
+            accusative: 'красную',
+            instrumental: 'красной',
+            prepositional: 'красной'
+          },
+          neuter: {
+            nominative: 'красное',
+            genitive: 'красного',
+            dative: 'красному',
+            accusative: 'красное',
+            instrumental: 'красным',
+            prepositional: 'красном'
+          }
+        },
+        plural: {
+          nominative: 'красные',
+          genitive: 'красных',
+          dative: 'красным',
+          accusative: 'красные',
+          instrumental: 'красными',
+          prepositional: 'красных'
+        }
+      },
+      {
+        imageBase: '1.1.2', // белый
+        language: 'русский',
+        singular: {
+          masculine: {
+            nominative: 'белый',
+            genitive: 'белого',
+            dative: 'белому',
+            accusative: 'белый',
+            instrumental: 'белым',
+            prepositional: 'белом'
+          },
+          feminine: {
+            nominative: 'белая',
+            genitive: 'белой',
+            dative: 'белой',
+            accusative: 'белую',
+            instrumental: 'белой',
+            prepositional: 'белой'
+          },
+          neuter: {
+            nominative: 'белое',
+            genitive: 'белого',
+            dative: 'белому',
+            accusative: 'белое',
+            instrumental: 'белым',
+            prepositional: 'белом'
+          }
+        },
+        plural: {
+          nominative: 'белые',
+          genitive: 'белых',
+          dative: 'белым',
+          accusative: 'белые',
+          instrumental: 'белыми',
+          prepositional: 'белых'
+        }
+      },
+      {
+        imageBase: '1.2.1', // большой
+        language: 'русский',
+        singular: {
+          masculine: {
+            nominative: 'большой',
+            genitive: 'большого',
+            dative: 'большому',
+            accusative: 'большой',
+            instrumental: 'большим',
+            prepositional: 'большом'
+          },
+          feminine: {
+            nominative: 'большая',
+            genitive: 'большой',
+            dative: 'большой',
+            accusative: 'большую',
+            instrumental: 'большой',
+            prepositional: 'большой'
+          },
+          neuter: {
+            nominative: 'большое',
+            genitive: 'большого',
+            dative: 'большому',
+            accusative: 'большое',
+            instrumental: 'большим',
+            prepositional: 'большом'
+          }
+        },
+        plural: {
+          nominative: 'большие',
+          genitive: 'больших',
+          dative: 'большим',
+          accusative: 'большие',
+          instrumental: 'большими',
+          prepositional: 'больших'
+        }
+      },
+      {
+        imageBase: '1.2.3', // красивый
+        language: 'русский',
+        singular: {
+          masculine: {
+            nominative: 'красивый',
+            genitive: 'красивого',
+            dative: 'красивому',
+            accusative: 'красивый',
+            instrumental: 'красивым',
+            prepositional: 'красивом'
+          },
+          feminine: {
+            nominative: 'красивая',
+            genitive: 'красивой',
+            dative: 'красивой',
+            accusative: 'красивую',
+            instrumental: 'красивой',
+            prepositional: 'красивой'
+          },
+          neuter: {
+            nominative: 'красивое',
+            genitive: 'красивого',
+            dative: 'красивому',
+            accusative: 'красивое',
+            instrumental: 'красивым',
+            prepositional: 'красивом'
+          }
+        },
+        plural: {
+          nominative: 'красивые',
+          genitive: 'красивых',
+          dative: 'красивым',
+          accusative: 'красивые',
+          instrumental: 'красивыми',
+          prepositional: 'красивых'
+        }
+      }
+    ];
+    
+    for (const caseData of casesToRestore) {
+      await AdjectiveCase.findOneAndUpdate(
+        { imageBase: caseData.imageBase, language: caseData.language },
+        caseData,
+        { upsert: true, new: true }
+      );
+    }
+    
+    res.json({
+      success: true,
+      message: 'Восстановлены падежи для 4 основных прилагательных',
+      restoredCases: casesToRestore.length
+    });
+    
+  } catch (error) {
+    res.status(500).json({ error: error.message });
   }
 });
 // Initialize server
