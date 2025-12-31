@@ -9,6 +9,7 @@ import path from 'path';
 import EasyYandexS3 from 'easy-yandex-s3';
 import { fileURLToPath } from 'url';
 import { dirname, resolve } from 'path';
+import AWS from 'aws-sdk';
 import dotenv from 'dotenv';
 dotenv.config();
 const __filename = fileURLToPath(import.meta.url);
@@ -18,7 +19,14 @@ const app = express();
 const PORT = process.env.PORT || 8888;
 const storage = multer.memoryStorage(); //
 
-
+const s3Client = new AWS.S3({
+  endpoint: 'https://storage.yandexcloud.net',
+  region: 'ru-central1',
+  credentials: {
+    accessKeyId: process.env.YANDEX_ACCESS_KEY_ID,
+    secretAccessKey: process.env.YANDEX_SECRET_ACCESS_KEY
+  }
+});
 
 const s3 = new EasyYandexS3({
   auth: {
@@ -838,20 +846,25 @@ app.get('/api/podcasts/:id', async (req, res) => {
 
 // Обновить подкаст
 
+// Генерация presigned URL для прямой загрузки в S3
 app.post('/api/podcasts/generate-upload-url', async (req, res) => {
   try {
     const { fileName, fileType, moduleId, title, duration, originalTranscript, hintTranscript, hint } = req.body;
+    
+    console.log('Generating upload URL for:', fileName);
     
     // Создаем запись подкаста в базе данных с статусом "uploading"
     const podcast = new Podcast({
       moduleId,
       title,
-      audioUrl: 'pending', // временное значение
+      audioUrl: 'pending',
       originalTranscript,
       hintTranscript: hintTranscript || '',
       hint: hint || '',
       duration: parseInt(duration) || 0,
-      status: 'uploading'
+      status: 'uploading',
+      fileSize: req.body.fileSize || 0,
+      mimeType: fileType
     });
     
     const savedPodcast = await podcast.save();
@@ -860,14 +873,26 @@ app.post('/api/podcasts/generate-upload-url', async (req, res) => {
     const fileExt = path.extname(fileName);
     const s3Key = `podcasts/${savedPodcast._id}${fileExt}`;
     
-    // Генерируем presigned URL для PUT запроса
-    const uploadUrl = await s3.getSignedUrl('putObject', {
+    // Параметры для presigned URL
+    const params = {
       Bucket: process.env.YANDEX_BUCKET,
       Key: s3Key,
       ContentType: fileType,
-      Expires: 3600, // 1 час на загрузку
-      ACL: 'public-read'
-    });
+      Expires: 3600, // 1 час
+      ACL: 'public-read',
+      Metadata: {
+        'podcast-id': savedPodcast._id.toString(),
+        'module-id': moduleId,
+        'title': title
+      }
+    };
+    
+    console.log('Generating presigned URL with params:', params);
+    
+    // Генерируем presigned URL для PUT запроса
+    const uploadUrl = await s3Client.getSignedUrlPromise('putObject', params);
+    
+    console.log('Generated upload URL:', uploadUrl);
     
     // Возвращаем URL для загрузки и ID подкаста
     res.json({
@@ -884,7 +909,8 @@ app.post('/api/podcasts/generate-upload-url', async (req, res) => {
     console.error('Error generating upload URL:', error);
     res.status(500).json({ 
       success: false,
-      error: error.message 
+      error: error.message,
+      stack: error.stack
     });
   }
 });

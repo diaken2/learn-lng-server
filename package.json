@@ -12,6 +12,7 @@
   "license": "ISC",
   "description": "",
   "dependencies": {
+    "aws-sdk": "^2.1693.0",
     "cors": "^2.8.5",
     "dotenv": "^17.2.3",
     "easy-yandex-s3": "^1.1.8",
